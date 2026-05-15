@@ -2,12 +2,31 @@
 //  NativeFileTableView.swift
 //  macSCP
 //
-//  NSViewRepresentable wrapping NSTableView for native drag and drop support
+//  NSViewRepresentable wrapping NSOutlineView for Finder-style tree list with
+//  collapsible folders, compact row height, and native drag-and-drop support.
 //
 
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+
+// MARK: - Tree Node
+
+/// Wrapper that represents one row in the outline view.
+/// Each node holds a RemoteFile and, once expanded, its lazily-loaded children.
+final class FileTreeNode {
+    let file: RemoteFile
+    var children: [FileTreeNode]?   // nil = not yet loaded; [] = empty folder
+    var isLoading: Bool = false
+
+    init(file: RemoteFile) {
+        self.file = file
+    }
+
+    var isExpandable: Bool { file.isDirectory }
+}
+
+// MARK: - NativeFileTableView
 
 struct NativeFileTableView: NSViewRepresentable {
     @Bindable var viewModel: FileBrowserViewModel
@@ -27,97 +46,111 @@ struct NativeFileTableView: NSViewRepresentable {
         self.onOpenEditor = onOpenEditor
     }
 
+    // MARK: makeNSView
+
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
-        let tableView = ContextMenuTableView()
+        let outlineView = ContextMenuOutlineView()
 
-        // Configure columns
-        let nameColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
+        // ── Columns ────────────────────────────────────────────────────────────
+
+        let nameColumn = NSTableColumn(identifier: .init("name"))
         nameColumn.title = "Name"
-        nameColumn.width = 250
+        nameColumn.width = 260
         nameColumn.minWidth = 150
         nameColumn.sortDescriptorPrototype = NSSortDescriptor(key: "name", ascending: true)
 
-        let kindColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("kind"))
+        let dateColumn = NSTableColumn(identifier: .init("date"))
+        dateColumn.title = "Date Modified"
+        dateColumn.width = 160
+        dateColumn.minWidth = 100
+        dateColumn.sortDescriptorPrototype = NSSortDescriptor(key: "date", ascending: true)
+
+        let sizeColumn = NSTableColumn(identifier: .init("size"))
+        sizeColumn.title = "Size"
+        sizeColumn.width = 80
+        sizeColumn.minWidth = 50
+        sizeColumn.sortDescriptorPrototype = NSSortDescriptor(key: "size", ascending: true)
+
+        let kindColumn = NSTableColumn(identifier: .init("kind"))
         kindColumn.title = "Kind"
         kindColumn.width = 120
         kindColumn.minWidth = 80
         kindColumn.sortDescriptorPrototype = NSSortDescriptor(key: "kind", ascending: true)
 
-        let dateColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("date"))
-        dateColumn.title = "Date Modified"
-        dateColumn.width = 140
-        dateColumn.minWidth = 100
-        dateColumn.sortDescriptorPrototype = NSSortDescriptor(key: "date", ascending: true)
+        outlineView.addTableColumn(nameColumn)
+        outlineView.addTableColumn(dateColumn)
+        outlineView.addTableColumn(sizeColumn)
+        outlineView.addTableColumn(kindColumn)
+        outlineView.outlineTableColumn = nameColumn
 
-        let sizeColumn = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("size"))
-        sizeColumn.title = "Size"
-        sizeColumn.width = 80
-        sizeColumn.minWidth = 60
-        sizeColumn.sortDescriptorPrototype = NSSortDescriptor(key: "size", ascending: true)
+        // ── Appearance ─────────────────────────────────────────────────────────
+        // Match Finder list view: compact rows, alternating backgrounds, no grid
+        outlineView.style = .inset
+        outlineView.usesAlternatingRowBackgroundColors = true
+        outlineView.allowsMultipleSelection = true
+        outlineView.allowsColumnReordering = true
+        outlineView.allowsColumnResizing = true
+        outlineView.rowHeight = 20          // Finder compact row height
+        outlineView.intercellSpacing = NSSize(width: 6, height: 1)
+        outlineView.gridStyleMask = []
+        outlineView.indentationPerLevel = 16
+        outlineView.indentationMarkerFollowsCell = true
+        outlineView.autoresizesOutlineColumn = false
 
-        tableView.addTableColumn(nameColumn)
-        tableView.addTableColumn(kindColumn)
-        tableView.addTableColumn(dateColumn)
-        tableView.addTableColumn(sizeColumn)
+        // ── Actions ────────────────────────────────────────────────────────────
+        outlineView.target = context.coordinator
+        outlineView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
 
-        // Configure table appearance
-        tableView.style = .inset
-        tableView.usesAlternatingRowBackgroundColors = true
-        tableView.allowsMultipleSelection = true
-        tableView.allowsColumnReordering = true
-        tableView.allowsColumnResizing = true
-        tableView.rowHeight = 28
-        tableView.intercellSpacing = NSSize(width: 6, height: 2)
-        tableView.gridStyleMask = []
+        // ── Drag & Drop ────────────────────────────────────────────────────────
+        outlineView.setDraggingSourceOperationMask(.copy, forLocal: false)
+        outlineView.registerForDraggedTypes([
+            .fileURL,
+            NSPasteboard.PasteboardType("com.apple.NSFilePromiseProvider")
+        ])
 
-        // Set up actions
-        tableView.target = context.coordinator
-        tableView.doubleAction = #selector(Coordinator.handleDoubleClick(_:))
+        outlineView.dataSource = context.coordinator
+        outlineView.delegate   = context.coordinator
+        outlineView.contextMenuDelegate = context.coordinator
 
-        // Enable drag and drop
-        tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
-        tableView.registerForDraggedTypes([.fileURL, NSPasteboard.PasteboardType("com.apple.NSFilePromiseProvider")])
-
-        tableView.dataSource = context.coordinator
-        tableView.delegate = context.coordinator
-
-        // Set up context menu
-        tableView.contextMenuDelegate = context.coordinator
-
-        // Configure scroll view
-        scrollView.documentView = tableView
-        scrollView.hasVerticalScroller = true
+        // ── ScrollView ─────────────────────────────────────────────────────────
+        scrollView.documentView      = outlineView
+        scrollView.hasVerticalScroller   = true
         scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = true
-        scrollView.borderType = .noBorder
+        scrollView.autohidesScrollers    = true
+        scrollView.borderType            = .noBorder
 
-        context.coordinator.tableView = tableView
-
+        context.coordinator.outlineView = outlineView
         return scrollView
     }
 
+    // MARK: updateNSView
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.viewModel = viewModel
-        context.coordinator.onDoubleClick = onDoubleClick
-        context.coordinator.onGetInfo = onGetInfo
+        let coordinator = context.coordinator
+        coordinator.viewModel      = viewModel
+        coordinator.onDoubleClick  = onDoubleClick
+        coordinator.onGetInfo      = onGetInfo
 
-        // Update selection state
-        if let tableView = context.coordinator.tableView {
-            context.coordinator.isUpdating = true
-            tableView.reloadData()
+        guard let outlineView = coordinator.outlineView else { return }
 
-            // Sync selection from viewModel to tableView
-            let selectedIndexes = NSMutableIndexSet()
-            for (index, file) in viewModel.sortedFiles.enumerated() {
-                if viewModel.selectedFiles.contains(file.id) {
-                    selectedIndexes.add(index)
-                }
+        coordinator.isUpdating = true
+        coordinator.rebuildRootNodes()
+        outlineView.reloadData()
+
+        // Re-sync selection
+        let selectedIndexes = NSMutableIndexSet()
+        for (index, node) in coordinator.rootNodes.enumerated() {
+            if viewModel.selectedFiles.contains(node.file.id) {
+                selectedIndexes.add(index)
             }
-            tableView.selectRowIndexes(selectedIndexes as IndexSet, byExtendingSelection: false)
-            context.coordinator.isUpdating = false
         }
+        outlineView.selectRowIndexes(selectedIndexes as IndexSet,
+                                     byExtendingSelection: false)
+        coordinator.isUpdating = false
     }
+
+    // MARK: makeCoordinator
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -128,16 +161,25 @@ struct NativeFileTableView: NSViewRepresentable {
         )
     }
 
+    // MARK: - Coordinator
+
     @MainActor
-    class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSFilePromiseProviderDelegate, ContextMenuTableViewDelegate {
+    class Coordinator: NSObject,
+                       NSOutlineViewDataSource,
+                       NSOutlineViewDelegate,
+                       NSFilePromiseProviderDelegate,
+                       ContextMenuOutlineViewDelegate {
+
         var viewModel: FileBrowserViewModel
         var onDoubleClick: (RemoteFile) -> Void
         var onGetInfo: (RemoteFile) -> Void
         var onOpenEditor: ((RemoteFile) -> Void)?
-        weak var tableView: NSTableView?
+        weak var outlineView: NSOutlineView?
         var isUpdating = false
 
-        // Track files being dragged for file promise
+        /// Top-level nodes mirroring viewModel.sortedFiles
+        var rootNodes: [FileTreeNode] = []
+
         private var draggedFiles: [RemoteFile] = []
         private let filePromiseQueue = OperationQueue()
 
@@ -147,62 +189,104 @@ struct NativeFileTableView: NSViewRepresentable {
             onGetInfo: @escaping (RemoteFile) -> Void,
             onOpenEditor: ((RemoteFile) -> Void)?
         ) {
-            self.viewModel = viewModel
-            self.onDoubleClick = onDoubleClick
-            self.onGetInfo = onGetInfo
-            self.onOpenEditor = onOpenEditor
-            self.filePromiseQueue.qualityOfService = .userInitiated
+            self.viewModel      = viewModel
+            self.onDoubleClick  = onDoubleClick
+            self.onGetInfo      = onGetInfo
+            self.onOpenEditor   = onOpenEditor
+            filePromiseQueue.qualityOfService = .userInitiated
         }
 
-        // MARK: - NSTableViewDataSource
+        // ── Helpers ────────────────────────────────────────────────────────────
 
-        func numberOfRows(in tableView: NSTableView) -> Int {
-            viewModel.sortedFiles.count
+        /// Rebuild root nodes from the current viewModel.sortedFiles.
+        /// Existing expanded nodes keep their children so collapse state is preserved.
+        func rebuildRootNodes() {
+            let existingByPath = Dictionary(
+                uniqueKeysWithValues: rootNodes.map { ($0.file.path, $0) }
+            )
+            rootNodes = viewModel.sortedFiles.map { file in
+                if let existing = existingByPath[file.path] {
+                    return existing
+                }
+                return FileTreeNode(file: file)
+            }
         }
 
-        // MARK: - NSTableViewDelegate
+        private func node(for item: Any?) -> FileTreeNode? {
+            item as? FileTreeNode
+        }
 
-        func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-            guard row < viewModel.sortedFiles.count else { return nil }
-            let file = viewModel.sortedFiles[row]
+        // ── NSOutlineViewDataSource ────────────────────────────────────────────
+
+        func outlineView(_ outlineView: NSOutlineView,
+                         numberOfChildrenOfItem item: Any?) -> Int {
+            if item == nil { return rootNodes.count }
+            guard let n = node(for: item) else { return 0 }
+            return n.children?.count ?? 0
+        }
+
+        func outlineView(_ outlineView: NSOutlineView,
+                         child index: Int,
+                         ofItem item: Any?) -> Any {
+            if item == nil { return rootNodes[index] }
+            guard let n = node(for: item),
+                  let children = n.children,
+                  index < children.count else {
+                return FileTreeNode(file: .placeholder)
+            }
+            return children[index]
+        }
+
+        func outlineView(_ outlineView: NSOutlineView,
+                         isItemExpandable item: Any) -> Bool {
+            node(for: item)?.isExpandable ?? false
+        }
+
+        // ── NSOutlineViewDelegate ──────────────────────────────────────────────
+
+        func outlineView(_ outlineView: NSOutlineView,
+                         viewFor tableColumn: NSTableColumn?,
+                         item: Any) -> NSView? {
+            guard let n = node(for: item) else { return nil }
+            let file = n.file
             let columnId = tableColumn?.identifier.rawValue ?? ""
-            let cellId = NSUserInterfaceItemIdentifier("Cell_\(columnId)")
+            let cellId = NSUserInterfaceItemIdentifier("OCell_\(columnId)")
 
-            var cell = tableView.makeView(withIdentifier: cellId, owner: nil) as? NSTableCellView
+            var cell = outlineView.makeView(withIdentifier: cellId, owner: nil)
+                       as? NSTableCellView
 
             if cell == nil {
                 cell = NSTableCellView()
                 cell?.identifier = cellId
 
-                let textField = NSTextField(labelWithString: "")
-                textField.translatesAutoresizingMaskIntoConstraints = false
-                textField.lineBreakMode = .byTruncatingTail
-                textField.font = NSFont.systemFont(ofSize: 13)
-
-                cell?.addSubview(textField)
-                cell?.textField = textField
+                let tf = NSTextField(labelWithString: "")
+                tf.translatesAutoresizingMaskIntoConstraints = false
+                tf.lineBreakMode = .byTruncatingTail
+                tf.font = .systemFont(ofSize: 12)
+                cell?.addSubview(tf)
+                cell?.textField = tf
 
                 if columnId == "name" {
-                    let imageView = NSImageView()
-                    imageView.translatesAutoresizingMaskIntoConstraints = false
-                    imageView.imageScaling = .scaleProportionallyUpOrDown
-                    cell?.addSubview(imageView)
-                    cell?.imageView = imageView
+                    let iv = NSImageView()
+                    iv.translatesAutoresizingMaskIntoConstraints = false
+                    iv.imageScaling = .scaleProportionallyUpOrDown
+                    cell?.addSubview(iv)
+                    cell?.imageView = iv
 
                     NSLayoutConstraint.activate([
-                        imageView.leadingAnchor.constraint(equalTo: cell!.leadingAnchor, constant: 4),
-                        imageView.centerYAnchor.constraint(equalTo: cell!.centerYAnchor),
-                        imageView.widthAnchor.constraint(equalToConstant: 20),
-                        imageView.heightAnchor.constraint(equalToConstant: 20),
-                        textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 8),
-                        textField.trailingAnchor.constraint(equalTo: cell!.trailingAnchor, constant: -4),
-                        textField.centerYAnchor.constraint(equalTo: cell!.centerYAnchor)
+                        iv.leadingAnchor.constraint(equalTo: cell!.leadingAnchor, constant: 2),
+                        iv.centerYAnchor.constraint(equalTo: cell!.centerYAnchor),
+                        iv.widthAnchor.constraint(equalToConstant: 16),
+                        iv.heightAnchor.constraint(equalToConstant: 16),
+                        tf.leadingAnchor.constraint(equalTo: iv.trailingAnchor, constant: 5),
+                        tf.trailingAnchor.constraint(equalTo: cell!.trailingAnchor, constant: -4),
+                        tf.centerYAnchor.constraint(equalTo: cell!.centerYAnchor)
                     ])
                 } else {
                     NSLayoutConstraint.activate([
-                        textField.leadingAnchor.constraint(equalTo: cell!.leadingAnchor, constant: 4),
-                        textField.trailingAnchor.constraint(equalTo: cell!.trailingAnchor, constant: -4),
-                        textField.centerYAnchor.constraint(equalTo: cell!.centerYAnchor)
+                        tf.leadingAnchor.constraint(equalTo: cell!.leadingAnchor, constant: 4),
+                        tf.trailingAnchor.constraint(equalTo: cell!.trailingAnchor, constant: -4),
+                        tf.centerYAnchor.constraint(equalTo: cell!.centerYAnchor)
                     ])
                 }
             }
@@ -210,22 +294,23 @@ struct NativeFileTableView: NSViewRepresentable {
             switch columnId {
             case "name":
                 cell?.textField?.stringValue = file.name
-                cell?.textField?.textColor = .labelColor
+                cell?.textField?.textColor   = .labelColor
                 let iconName = FileTypeService.iconName(for: file)
-                if let image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil) {
-                    let color = NSColor(FileTypeService.iconColor(for: file))
-                    cell?.imageView?.image = image
-                    cell?.imageView?.contentTintColor = color
+                if let img = NSImage(systemSymbolName: iconName,
+                                     accessibilityDescription: nil) {
+                    cell?.imageView?.image = img
+                    cell?.imageView?.contentTintColor =
+                        NSColor(FileTypeService.iconColor(for: file))
                 }
-            case "kind":
-                cell?.textField?.stringValue = FileTypeService.typeDescription(for: file)
-                cell?.textField?.textColor = .secondaryLabelColor
             case "date":
                 cell?.textField?.stringValue = file.modificationDate?.fileListDisplayString ?? "--"
-                cell?.textField?.textColor = .secondaryLabelColor
+                cell?.textField?.textColor   = .secondaryLabelColor
             case "size":
                 cell?.textField?.stringValue = file.displaySize
-                cell?.textField?.textColor = .secondaryLabelColor
+                cell?.textField?.textColor   = .secondaryLabelColor
+            case "kind":
+                cell?.textField?.stringValue = FileTypeService.typeDescription(for: file)
+                cell?.textField?.textColor   = .secondaryLabelColor
             default:
                 break
             }
@@ -233,86 +318,123 @@ struct NativeFileTableView: NSViewRepresentable {
             return cell
         }
 
-        func tableViewSelectionDidChange(_ notification: Notification) {
-            guard !isUpdating, let tableView = tableView else { return }
-            let selectedIndexes = tableView.selectedRowIndexes
-            var newSelection = Set<UUID>()
-            for index in selectedIndexes {
-                if index < viewModel.sortedFiles.count {
-                    newSelection.insert(viewModel.sortedFiles[index].id)
+        /// Row height — match Finder list view (20 pt content + 1 pt spacing).
+        func outlineView(_ outlineView: NSOutlineView,
+                         heightOfRowByItem item: Any) -> CGFloat {
+            20
+        }
+
+        // ── Expand / collapse with lazy child loading ──────────────────────────
+
+        func outlineViewItemWillExpand(_ notification: Notification) {
+            guard let n = notification.userInfo?["NSObject"] as? FileTreeNode,
+                  n.children == nil,
+                  !n.isLoading else { return }
+
+            n.isLoading = true
+            Task { @MainActor [weak self] in
+                guard let self, let ov = self.outlineView else { return }
+                do {
+                    let children = try await self.viewModel.listChildFiles(at: n.file.path)
+                    let sorted   = RemoteFile.sortedFiles(
+                        children,
+                        by: self.viewModel.sortCriteria,
+                        ascending: self.viewModel.sortAscending
+                    )
+                    n.children  = sorted.map { FileTreeNode(file: $0) }
+                } catch {
+                    n.children = []
+                }
+                n.isLoading = false
+
+                ov.reloadItem(n, reloadChildren: true)
+                // NSOutlineView will finish the expand automatically because
+                // numberOfChildrenOfItem now returns the correct count.
+            }
+        }
+
+        func outlineViewItemDidCollapse(_ notification: Notification) {
+            // Keep children cached so re-expanding is instant.
+            // If you want to force-reload on next expand, set n.children = nil here.
+        }
+
+        // ── Selection ─────────────────────────────────────────────────────────
+
+        func outlineViewSelectionDidChange(_ notification: Notification) {
+            guard !isUpdating, let ov = outlineView else { return }
+            var sel = Set<UUID>()
+            for row in ov.selectedRowIndexes {
+                if let n = ov.item(atRow: row) as? FileTreeNode {
+                    sel.insert(n.file.id)
                 }
             }
-            viewModel.selectedFiles = newSelection
+            viewModel.selectedFiles = sel
         }
 
-        func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-            guard let sortDescriptor = tableView.sortDescriptors.first,
-                  let key = sortDescriptor.key else { return }
+        // ── Sort ──────────────────────────────────────────────────────────────
 
+        func outlineView(_ outlineView: NSOutlineView,
+                         sortDescriptorsDidChange old: [NSSortDescriptor]) {
+            guard let sd = outlineView.sortDescriptors.first,
+                  let key = sd.key else { return }
             switch key {
-            case "name":
-                viewModel.sortCriteria = .name
-            case "kind":
-                viewModel.sortCriteria = .type
-            case "date":
-                viewModel.sortCriteria = .date
-            case "size":
-                viewModel.sortCriteria = .size
-            default:
-                break
+            case "name": viewModel.sortCriteria = .name
+            case "kind": viewModel.sortCriteria = .type
+            case "date": viewModel.sortCriteria = .date
+            case "size": viewModel.sortCriteria = .size
+            default: break
             }
-
-            viewModel.sortAscending = sortDescriptor.ascending
+            viewModel.sortAscending = sd.ascending
         }
 
-        @objc func handleDoubleClick(_ sender: NSTableView) {
+        // ── Double click ──────────────────────────────────────────────────────
+
+        @objc func handleDoubleClick(_ sender: NSOutlineView) {
             let row = sender.clickedRow
-            guard row >= 0 && row < viewModel.sortedFiles.count else { return }
-            let file = viewModel.sortedFiles[row]
-            onDoubleClick(file)
+            guard row >= 0 else { return }
+            guard let n = sender.item(atRow: row) as? FileTreeNode else { return }
+            onDoubleClick(n.file)
         }
 
-        // MARK: - Drag OUT (Download via File Promise)
+        // MARK: - Drag OUT (File Promise)
 
-        func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
-            guard row < viewModel.sortedFiles.count else { return nil }
-            let file = viewModel.sortedFiles[row]
-            guard file.isFile else { return nil } // Skip directories for now
-
-            let provider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: self)
-            provider.userInfo = ["file": file, "row": row]
+        func outlineView(_ outlineView: NSOutlineView,
+                         pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
+            guard let n = node(for: item), n.file.isFile else { return nil }
+            let provider = NSFilePromiseProvider(
+                fileType: UTType.data.identifier, delegate: self)
+            provider.userInfo = ["file": n.file]
             return provider
         }
 
-        func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
-            // Store all files being dragged
-            draggedFiles = rowIndexes.compactMap { index in
-                guard index < viewModel.sortedFiles.count else { return nil }
-                return viewModel.sortedFiles[index]
-            }.filter { $0.isFile }
+        func outlineView(_ outlineView: NSOutlineView,
+                         draggingSession session: NSDraggingSession,
+                         willBeginAt screenPoint: NSPoint,
+                         forItems draggedItems: [Any]) {
+            draggedFiles = draggedItems.compactMap { ($0 as? FileTreeNode)?.file }
+                                       .filter { $0.isFile }
         }
 
-        func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        func outlineView(_ outlineView: NSOutlineView,
+                         draggingSession session: NSDraggingSession,
+                         endedAt screenPoint: NSPoint,
+                         operation: NSDragOperation) {
             draggedFiles = []
         }
 
-        // MARK: - NSFilePromiseProviderDelegate
+        // MARK: NSFilePromiseProviderDelegate
 
-        func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
-            guard let userInfo = filePromiseProvider.userInfo as? [String: Any],
-                  let file = userInfo["file"] as? RemoteFile else {
-                return "unknown"
-            }
-            return file.name
+        func filePromiseProvider(_ p: NSFilePromiseProvider,
+                                 fileNameForType type: String) -> String {
+            (p.userInfo as? [String: Any]).flatMap { $0["file"] as? RemoteFile }?.name ?? "file"
         }
 
-        func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
-            guard let userInfo = filePromiseProvider.userInfo as? [String: Any],
-                  let file = userInfo["file"] as? RemoteFile else {
-                completionHandler(nil)
-                return
+        func filePromiseProvider(_ p: NSFilePromiseProvider,
+                                 writePromiseTo url: URL,
+                                 completionHandler: @escaping (Error?) -> Void) {
+            guard let file = (p.userInfo as? [String: Any])?["file"] as? RemoteFile else {
+                completionHandler(nil); return
             }
-
             Task { @MainActor in
                 do {
                     try await viewModel.downloadFileToURL(file, destinationURL: url)
@@ -323,180 +445,153 @@ struct NativeFileTableView: NSViewRepresentable {
             }
         }
 
-        func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        func operationQueue(for p: NSFilePromiseProvider) -> OperationQueue {
             filePromiseQueue
         }
 
         // MARK: - Drop IN (Upload)
 
-        func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo, proposedRow row: Int, proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
-            // Accept file URLs from Finder
-            if info.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) {
-                // Drop on the table (not between rows)
-                tableView.setDropRow(-1, dropOperation: .on)
+        func outlineView(_ outlineView: NSOutlineView,
+                         validateDrop info: NSDraggingInfo,
+                         proposedItem item: Any?,
+                         proposedChildIndex index: Int) -> NSDragOperation {
+            if info.draggingPasteboard.canReadObject(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]) {
+                outlineView.setDropItem(nil, dropChildIndex: NSOutlineViewDropOnItemIndex)
                 return .copy
             }
             return []
         }
 
-        func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
-            guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else {
-                return false
-            }
+        func outlineView(_ outlineView: NSOutlineView,
+                         acceptDrop info: NSDraggingInfo,
+                         item: Any?,
+                         childIndex index: Int) -> Bool {
+            guard let urls = info.draggingPasteboard.readObjects(
+                    forClasses: [NSURL.self],
+                    options: [.urlReadingFileURLsOnly: true]) as? [URL]
+            else { return false }
 
-            // Filter to only include files that exist
-            let validURLs = urls.filter { url in
-                var isDirectory: ObjCBool = false
-                return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            let valid = urls.filter { url in
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: url.path,
+                                                      isDirectory: &isDir)
             }
-
-            guard !validURLs.isEmpty else { return false }
+            guard !valid.isEmpty else { return false }
 
             Task { @MainActor in
-                await viewModel.uploadDroppedFiles(validURLs)
+                await viewModel.uploadDroppedFiles(valid)
             }
-
             return true
         }
     }
 }
 
+// MARK: - RemoteFile placeholder
+
+private extension RemoteFile {
+    static var placeholder: RemoteFile {
+        RemoteFile(name: "", path: "", isDirectory: false,
+                   size: 0, permissions: "")
+    }
+}
+
 // MARK: - Context Menu Support
+
 extension NativeFileTableView.Coordinator {
+
     func contextMenu(for row: Int) -> NSMenu? {
-        guard row >= 0 && row < viewModel.sortedFiles.count else { return nil }
-        let file = viewModel.sortedFiles[row]
+        guard let ov = outlineView,
+              let n = ov.item(atRow: row) as? FileTreeNode else { return nil }
+        let file = n.file
 
         let menu = NSMenu()
 
         if file.isFile {
-            let openItem = NSMenuItem(title: "Open in Editor", action: #selector(handleOpenInEditor(_:)), keyEquivalent: "")
-            openItem.target = self
-            openItem.representedObject = file
-            openItem.image = NSImage(systemSymbolName: "pencil.and.outline", accessibilityDescription: nil)
-            menu.addItem(openItem)
-            menu.addItem(NSMenuItem.separator())
+            addItem(menu, title: "Open in Editor",
+                    action: #selector(handleOpenInEditor(_:)),
+                    image: "pencil.and.outline", object: file)
+            menu.addItem(.separator())
         }
 
-        let copyItem = NSMenuItem(title: "Copy", action: #selector(handleCopy(_:)), keyEquivalent: "")
-        copyItem.target = self
-        copyItem.representedObject = file
-        copyItem.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
-        menu.addItem(copyItem)
-
-        let cutItem = NSMenuItem(title: "Cut", action: #selector(handleCut(_:)), keyEquivalent: "")
-        cutItem.target = self
-        cutItem.representedObject = file
-        cutItem.image = NSImage(systemSymbolName: "scissors", accessibilityDescription: nil)
-        menu.addItem(cutItem)
-
+        addItem(menu, title: "Copy",   action: #selector(handleCopy(_:)),   image: "doc.on.doc",          object: file)
+        addItem(menu, title: "Cut",    action: #selector(handleCut(_:)),    image: "scissors",             object: file)
         if viewModel.canPaste {
-            let pasteItem = NSMenuItem(title: "Paste", action: #selector(handlePaste(_:)), keyEquivalent: "")
-            pasteItem.target = self
-            pasteItem.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
-            menu.addItem(pasteItem)
+            addItem(menu, title: "Paste", action: #selector(handlePaste(_:)), image: "doc.on.clipboard", object: file)
         }
-
-        menu.addItem(NSMenuItem.separator())
-
-        let renameItem = NSMenuItem(title: "Rename", action: #selector(handleRename(_:)), keyEquivalent: "")
-        renameItem.target = self
-        renameItem.representedObject = file
-        renameItem.image = NSImage(systemSymbolName: "pencil", accessibilityDescription: nil)
-        menu.addItem(renameItem)
-
-        let infoItem = NSMenuItem(title: "Get Info", action: #selector(handleGetInfo(_:)), keyEquivalent: "")
-        infoItem.target = self
-        infoItem.representedObject = file
-        infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
-        menu.addItem(infoItem)
-
-        menu.addItem(NSMenuItem.separator())
-
+        menu.addItem(.separator())
+        addItem(menu, title: "Rename",   action: #selector(handleRename(_:)),   image: "pencil",        object: file)
+        addItem(menu, title: "Get Info", action: #selector(handleGetInfo(_:)),  image: "info.circle",   object: file)
+        menu.addItem(.separator())
         if file.isFile {
-            let downloadItem = NSMenuItem(title: "Download", action: #selector(handleDownload(_:)), keyEquivalent: "")
-            downloadItem.target = self
-            downloadItem.representedObject = file
-            downloadItem.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
-            menu.addItem(downloadItem)
-            menu.addItem(NSMenuItem.separator())
+            addItem(menu, title: "Download", action: #selector(handleDownload(_:)), image: "arrow.down.circle", object: file)
+            menu.addItem(.separator())
         }
-
-        let deleteItem = NSMenuItem(title: "Delete", action: #selector(handleDelete(_:)), keyEquivalent: "")
-        deleteItem.target = self
-        deleteItem.representedObject = file
-        deleteItem.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
-        menu.addItem(deleteItem)
+        addItem(menu, title: "Delete", action: #selector(handleDelete(_:)), image: "trash", object: file)
 
         return menu
     }
 
-    @objc func handleOpenInEditor(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        onOpenEditor?(file)
+    private func addItem(_ menu: NSMenu,
+                         title: String,
+                         action: Selector,
+                         image: String,
+                         object: RemoteFile) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = object
+        item.image = NSImage(systemSymbolName: image, accessibilityDescription: nil)
+        menu.addItem(item)
     }
 
-    @objc func handleCopy(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        viewModel.selectedFiles = [file.id]
-        viewModel.copySelectedFiles()
+    @objc func handleOpenInEditor(_ s: NSMenuItem) {
+        (s.representedObject as? RemoteFile).map { onOpenEditor?($0) }
     }
-
-    @objc func handleCut(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        viewModel.selectedFiles = [file.id]
-        viewModel.cutSelectedFiles()
+    @objc func handleCopy(_ s: NSMenuItem) {
+        guard let f = s.representedObject as? RemoteFile else { return }
+        viewModel.selectedFiles = [f.id]; viewModel.copySelectedFiles()
     }
-
-    @objc func handlePaste(_ sender: NSMenuItem) {
-        Task { @MainActor in
-            await viewModel.paste()
-        }
+    @objc func handleCut(_ s: NSMenuItem) {
+        guard let f = s.representedObject as? RemoteFile else { return }
+        viewModel.selectedFiles = [f.id]; viewModel.cutSelectedFiles()
     }
-
-    @objc func handleRename(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        viewModel.startRename(file)
+    @objc func handlePaste(_ s: NSMenuItem) {
+        Task { @MainActor in await viewModel.paste() }
     }
-
-    @objc func handleGetInfo(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        onGetInfo(file)
+    @objc func handleRename(_ s: NSMenuItem) {
+        (s.representedObject as? RemoteFile).map { viewModel.startRename($0) }
     }
-
-    @objc func handleDownload(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        Task { @MainActor in
-            await viewModel.downloadFile(file)
-        }
+    @objc func handleGetInfo(_ s: NSMenuItem) {
+        (s.representedObject as? RemoteFile).map { onGetInfo($0) }
     }
-
-    @objc func handleDelete(_ sender: NSMenuItem) {
-        guard let file = sender.representedObject as? RemoteFile else { return }
-        viewModel.confirmDelete([file])
+    @objc func handleDownload(_ s: NSMenuItem) {
+        guard let f = s.representedObject as? RemoteFile else { return }
+        Task { @MainActor in await viewModel.downloadFile(f) }
+    }
+    @objc func handleDelete(_ s: NSMenuItem) {
+        (s.representedObject as? RemoteFile).map { viewModel.confirmDelete([$0]) }
     }
 }
 
-// MARK: - Context Menu Table View
-protocol ContextMenuTableViewDelegate: AnyObject {
+// MARK: - ContextMenuOutlineView
+
+protocol ContextMenuOutlineViewDelegate: AnyObject {
     func contextMenu(for row: Int) -> NSMenu?
 }
 
-class ContextMenuTableView: NSTableView {
-    weak var contextMenuDelegate: ContextMenuTableViewDelegate?
+class ContextMenuOutlineView: NSOutlineView {
+    weak var contextMenuDelegate: ContextMenuOutlineViewDelegate?
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         let row = self.row(at: point)
-
         if row >= 0 {
-            // Select the row if not already selected
             if !selectedRowIndexes.contains(row) {
                 selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
             }
             return contextMenuDelegate?.contextMenu(for: row)
         }
-
         return super.menu(for: event)
     }
 }

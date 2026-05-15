@@ -255,6 +255,12 @@ final class FileBrowserViewModel {
         }
     }
 
+    /// Fetches the contents of a folder at `path` without changing navigation
+    /// state. Used by the outline view for lazy child-node loading.
+    func listChildFiles(at path: String) async throws -> [RemoteFile] {
+        try await fileRepository.listFiles(at: path)
+    }
+
     func navigateTo(_ path: String) async {
         state = .loading
 
