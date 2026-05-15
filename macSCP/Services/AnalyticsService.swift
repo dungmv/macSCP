@@ -68,7 +68,7 @@ enum AnalyticsService {
     // MARK: - Configuration
 
     static func initialize() {
-        let config = TelemetryManagerConfiguration(appID: "B5BEE195-393B-4B84-8B10-0BEC90496251")
+        let config = TelemetryManagerConfiguration(appID: "FBA47B18-CCC4-4866-A7A6-FC14E247B617")
         config.defaultUser = anonymousUserId
         TelemetryManager.initialize(with: config)
 
