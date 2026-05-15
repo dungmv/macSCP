@@ -2,17 +2,17 @@
 //  S3Session.swift
 //  macSCP
 //
-//  Actor-based S3 session using Soto SDK
+//  Actor-based S3 session using AWS SDK for Swift
 //
 
+import AWSS3
+import AWSSDKIdentity
 import Foundation
-import SotoS3
-import NIOFoundationCompat
-import NIOCore
+import Smithy
+import SmithyIdentity
 
 actor S3Session: S3SessionProtocol {
-    private var client: AWSClient?
-    private var s3: S3?
+    private var s3: S3Client?
     private(set) var isConnected = false
     private(set) var currentPath = "/"
     private(set) var bucketName = ""
@@ -38,31 +38,31 @@ actor S3Session: S3SessionProtocol {
         log("Connecting to S3 bucket: \(bucket) in region: \(region)")
 
         do {
-            let awsRegion = Region(rawValue: region)
-
-            client = AWSClient(
-                credentialProvider: .static(accessKeyId: accessKeyId, secretAccessKey: secretAccessKey)
+            let credentials = AWSCredentialIdentity(
+                accessKey: accessKeyId,
+                secret: secretAccessKey
+            )
+            let identityResolver = StaticAWSCredentialIdentityResolver(credentials)
+            var configuration = try await S3Client.S3ClientConfig(
+                awsCredentialIdentityResolver: identityResolver,
+                region: region
             )
 
-            if let endpoint = endpoint, !endpoint.isEmpty {
-                // Custom endpoint for S3-compatible services (MinIO, DigitalOcean Spaces, etc.)
-                s3 = S3(client: client!, region: awsRegion, endpoint: endpoint)
-            } else {
-                s3 = S3(client: client!, region: awsRegion)
+            if let endpoint, !endpoint.isEmpty {
+                configuration.endpoint = endpoint
+                configuration.forcePathStyle = true
             }
+            s3 = S3Client(config: configuration)
 
             // Verify connection by checking if bucket exists
-            let headBucketRequest = S3.HeadBucketRequest(bucket: bucket)
-            _ = try await s3!.headBucket(headBucketRequest)
+            let headBucketRequest = HeadBucketInput(bucket: bucket)
+            _ = try await s3!.headBucket(input: headBucketRequest)
 
             bucketName = bucket
             currentPath = "/"
             isConnected = true
 
             log("Connected successfully to S3 bucket: \(bucket)")
-        } catch let error as S3ErrorType {
-            try await cleanup()
-            throw parseS3Error(error)
         } catch {
             try await cleanup()
             throw parseConnectionError(error)
@@ -78,8 +78,6 @@ actor S3Session: S3SessionProtocol {
     }
 
     private func cleanup() async throws {
-        try? await client?.shutdown()
-        client = nil
         s3 = nil
     }
 
@@ -93,13 +91,13 @@ actor S3Session: S3SessionProtocol {
         let prefix = normalizePrefix(path)
         currentPath = "/" + prefix
 
-        let request = S3.ListObjectsV2Request(
+        let request = ListObjectsV2Input(
             bucket: bucketName,
             delimiter: "/",
             prefix: prefix.isEmpty ? nil : prefix
         )
 
-        let response = try await s3.listObjectsV2(request)
+        let response = try await s3.listObjectsV2(input: request)
 
         var files: [RemoteFile] = []
 
@@ -138,7 +136,7 @@ actor S3Session: S3SessionProtocol {
                             name: name,
                             path: "/" + key,
                             isDirectory: false,
-                            size: object.size ?? 0,
+                            size: Int64(object.size ?? 0),
                             permissions: "-rw-r--r--",
                             modificationDate: object.lastModified
                         )
@@ -158,10 +156,10 @@ actor S3Session: S3SessionProtocol {
 
         let key = normalizeKey(path)
 
-        let request = S3.HeadObjectRequest(bucket: bucketName, key: key)
+        let request = HeadObjectInput(bucket: bucketName, key: key)
 
         do {
-            let response = try await s3.headObject(request)
+            let response = try await s3.headObject(input: request)
 
             let fileName = (path as NSString).lastPathComponent
             let isDirectory = key.hasSuffix("/")
@@ -170,7 +168,7 @@ actor S3Session: S3SessionProtocol {
                 name: fileName,
                 path: path,
                 isDirectory: isDirectory,
-                size: response.contentLength ?? 0,
+                size: response.contentLength.map(Int64.init) ?? 0,
                 permissions: isDirectory ? "drwxr-xr-x" : "-rw-r--r--",
                 modificationDate: response.lastModified
             )
@@ -190,14 +188,14 @@ actor S3Session: S3SessionProtocol {
             key += "/"
         }
 
-        let request = S3.PutObjectRequest(
-            body: .init(),
+        let request = PutObjectInput(
+            body: ByteStream.data(Data()),
             bucket: bucketName,
             key: key
         )
 
         do {
-            _ = try await s3.putObject(request)
+            _ = try await s3.putObject(input: request)
             log("Created directory: \(path)")
         } catch {
             throw parseS3Error(error)
@@ -211,14 +209,14 @@ actor S3Session: S3SessionProtocol {
 
         let key = normalizeKey(path)
 
-        let request = S3.PutObjectRequest(
-            body: .init(),
+        let request = PutObjectInput(
+            body: ByteStream.data(Data()),
             bucket: bucketName,
             key: key
         )
 
         do {
-            _ = try await s3.putObject(request)
+            _ = try await s3.putObject(input: request)
             log("Created file: \(path)")
         } catch {
             throw parseS3Error(error)
@@ -232,10 +230,10 @@ actor S3Session: S3SessionProtocol {
 
         let key = normalizeKey(path)
 
-        let request = S3.DeleteObjectRequest(bucket: bucketName, key: key)
+        let request = DeleteObjectInput(bucket: bucketName, key: key)
 
         do {
-            _ = try await s3.deleteObject(request)
+            _ = try await s3.deleteObject(input: request)
             log("Deleted file: \(path)")
         } catch {
             throw parseS3Error(error)
@@ -253,27 +251,27 @@ actor S3Session: S3SessionProtocol {
         }
 
         // List all objects with this prefix and delete them
-        let listRequest = S3.ListObjectsV2Request(bucket: bucketName, prefix: prefix)
-        let response = try await s3.listObjectsV2(listRequest)
+        let listRequest = ListObjectsV2Input(bucket: bucketName, prefix: prefix)
+        let response = try await s3.listObjectsV2(input: listRequest)
 
         if let contents = response.contents, !contents.isEmpty {
-            let objectsToDelete = contents.compactMap { object -> S3.ObjectIdentifier? in
+            let objectsToDelete = contents.compactMap { object -> S3ClientTypes.ObjectIdentifier? in
                 guard let key = object.key else { return nil }
-                return S3.ObjectIdentifier(key: key)
+                return S3ClientTypes.ObjectIdentifier(key: key)
             }
 
             if !objectsToDelete.isEmpty {
-                let deleteRequest = S3.DeleteObjectsRequest(
+                let deleteRequest = DeleteObjectsInput(
                     bucket: bucketName,
-                    delete: S3.Delete(objects: objectsToDelete)
+                    delete: S3ClientTypes.Delete(objects: objectsToDelete)
                 )
-                _ = try await s3.deleteObjects(deleteRequest)
+                _ = try await s3.deleteObjects(input: deleteRequest)
             }
         }
 
         // Also try to delete the directory marker itself
-        let dirMarkerRequest = S3.DeleteObjectRequest(bucket: bucketName, key: prefix)
-        _ = try? await s3.deleteObject(dirMarkerRequest)
+        let dirMarkerRequest = DeleteObjectInput(bucket: bucketName, key: prefix)
+        _ = try? await s3.deleteObject(input: dirMarkerRequest)
 
         log("Deleted directory: \(path)")
     }
@@ -292,12 +290,12 @@ actor S3Session: S3SessionProtocol {
                 throw AppError.notConnected
             }
 
-            let listRequest = S3.ListObjectsV2Request(
+            let listRequest = ListObjectsV2Input(
                 bucket: bucketName,
                 maxKeys: 1,
                 prefix: sourceKey + "/"
             )
-            let response = try await s3.listObjectsV2(listRequest)
+            let response = try await s3.listObjectsV2(input: listRequest)
 
             if let contents = response.contents, !contents.isEmpty {
                 // It's a directory - has objects under it
@@ -320,14 +318,14 @@ actor S3Session: S3SessionProtocol {
         let sourceKey = normalizeKey(sourcePath)
         let destKey = normalizeKey(destinationPath)
 
-        let request = S3.CopyObjectRequest(
+        let request = CopyObjectInput(
             bucket: bucketName,
-            copySource: "\(bucketName)/\(sourceKey)",
+            copySource: copySource(bucket: bucketName, key: sourceKey),
             key: destKey
         )
 
         do {
-            _ = try await s3.copyObject(request)
+            _ = try await s3.copyObject(input: request)
             log("Copied file: \(sourcePath) to \(destinationPath)")
         } catch {
             throw parseS3Error(error)
@@ -350,8 +348,8 @@ actor S3Session: S3SessionProtocol {
         }
 
         // List all objects with source prefix
-        let listRequest = S3.ListObjectsV2Request(bucket: bucketName, prefix: sourcePrefix)
-        let response = try await s3.listObjectsV2(listRequest)
+        let listRequest = ListObjectsV2Input(bucket: bucketName, prefix: sourcePrefix)
+        let response = try await s3.listObjectsV2(input: listRequest)
 
         if let contents = response.contents {
             for object in contents {
@@ -359,12 +357,12 @@ actor S3Session: S3SessionProtocol {
                     let relativePath = String(key.dropFirst(sourcePrefix.count))
                     let newKey = destPrefix + relativePath
 
-                    let copyRequest = S3.CopyObjectRequest(
+                    let copyRequest = CopyObjectInput(
                         bucket: bucketName,
-                        copySource: "\(bucketName)/\(key)",
+                        copySource: copySource(bucket: bucketName, key: key),
                         key: newKey
                     )
-                    _ = try await s3.copyObject(copyRequest)
+                    _ = try await s3.copyObject(input: copyRequest)
                 }
             }
         }
@@ -399,31 +397,20 @@ actor S3Session: S3SessionProtocol {
 
         let key = normalizeKey(remotePath)
 
-        let request = S3.GetObjectRequest(bucket: bucketName, key: key)
+        let request = GetObjectInput(bucket: bucketName, key: key)
 
         do {
-            let response = try await s3.getObject(request)
+            let response = try await s3.getObject(input: request)
+            guard let body = response.body else {
+                throw AppError.s3OperationFailed("Missing response body")
+            }
 
             // Report initial progress
             progress?(0)
 
-            // Create/truncate local file
-            FileManager.default.createFile(atPath: localURL.path, contents: nil)
-            let fileHandle = try FileHandle(forWritingTo: localURL)
-            defer { try? fileHandle.close() }
-
-            // Stream the response body to disk in chunks
-            var bytesWritten: Int64 = 0
-            for try await chunk in response.body {
-                try Task.checkCancellation()
-
-                let data = Data(buffer: chunk)
-                try fileHandle.write(contentsOf: data)
-                bytesWritten += Int64(data.count)
-
-                // Report progress
-                progress?(bytesWritten)
-            }
+            let data = try await body.readData() ?? Data()
+            try data.write(to: localURL, options: .atomic)
+            progress?(Int64(data.count))
 
             log("Downloaded: \(remotePath) to \(localURL.path)")
         } catch {
@@ -455,14 +442,12 @@ actor S3Session: S3SessionProtocol {
                 let fileHandle = try FileHandle(forReadingFrom: localURL)
                 defer { try? fileHandle.close() }
                 let data = fileHandle.readDataToEndOfFile()
-                let byteBuffer = ByteBuffer(data: data)
-
-                let request = S3.PutObjectRequest(
-                    body: .init(buffer: byteBuffer),
+                let request = PutObjectInput(
+                    body: ByteStream.data(data),
                     bucket: bucketName,
                     key: key
                 )
-                _ = try await s3.putObject(request)
+                _ = try await s3.putObject(input: request)
 
                 // Report completion for small files
                 progress?(fileSize)
@@ -488,14 +473,14 @@ actor S3Session: S3SessionProtocol {
         defer { try? fileHandle.close() }
 
         // 1. Initiate multipart upload
-        let createRequest = S3.CreateMultipartUploadRequest(bucket: bucketName, key: key)
-        let createResponse = try await s3.createMultipartUpload(createRequest)
+        let createRequest = CreateMultipartUploadInput(bucket: bucketName, key: key)
+        let createResponse = try await s3.createMultipartUpload(input: createRequest)
 
         guard let uploadId = createResponse.uploadId else {
             throw AppError.s3OperationFailed("Failed to initiate multipart upload")
         }
 
-        var completedParts: [S3.CompletedPart] = []
+        var completedParts: [S3ClientTypes.CompletedPart] = []
         var partNumber = 1
         var offset: UInt64 = 0
 
@@ -507,17 +492,17 @@ actor S3Session: S3SessionProtocol {
                     break
                 }
 
-                let uploadPartRequest = S3.UploadPartRequest(
-                    body: .init(buffer: ByteBuffer(data: partData)),
+                let uploadPartRequest = UploadPartInput(
+                    body: ByteStream.data(partData),
                     bucket: bucketName,
                     key: key,
                     partNumber: partNumber,
                     uploadId: uploadId
                 )
 
-                let partResponse = try await s3.uploadPart(uploadPartRequest)
+                let partResponse = try await s3.uploadPart(input: uploadPartRequest)
 
-                completedParts.append(S3.CompletedPart(eTag: partResponse.eTag, partNumber: partNumber))
+                completedParts.append(S3ClientTypes.CompletedPart(eTag: partResponse.eTag, partNumber: partNumber))
                 partNumber += 1
                 offset += UInt64(partData.count)
 
@@ -526,22 +511,22 @@ actor S3Session: S3SessionProtocol {
             }
 
             // 3. Complete multipart upload
-            let completeRequest = S3.CompleteMultipartUploadRequest(
+            let completeRequest = CompleteMultipartUploadInput(
                 bucket: bucketName,
                 key: key,
-                multipartUpload: S3.CompletedMultipartUpload(parts: completedParts),
+                multipartUpload: S3ClientTypes.CompletedMultipartUpload(parts: completedParts),
                 uploadId: uploadId
             )
-            _ = try await s3.completeMultipartUpload(completeRequest)
+            _ = try await s3.completeMultipartUpload(input: completeRequest)
 
         } catch {
             // Abort multipart upload on failure to clean up partial uploads
-            let abortRequest = S3.AbortMultipartUploadRequest(
+            let abortRequest = AbortMultipartUploadInput(
                 bucket: bucketName,
                 key: key,
                 uploadId: uploadId
             )
-            _ = try? await s3.abortMultipartUpload(abortRequest)
+            _ = try? await s3.abortMultipartUpload(input: abortRequest)
             throw error
         }
     }
@@ -553,14 +538,16 @@ actor S3Session: S3SessionProtocol {
 
         let key = normalizeKey(path)
 
-        let request = S3.GetObjectRequest(bucket: bucketName, key: key)
+        let request = GetObjectInput(bucket: bucketName, key: key)
 
         do {
-            let response = try await s3.getObject(request)
+            let response = try await s3.getObject(input: request)
+            guard let body = response.body else {
+                throw AppError.s3OperationFailed("Missing response body")
+            }
 
-            let body = response.body
-            let data = try await body.collect(upTo: .max)
-            let content = String(buffer: data)
+            let data = try await body.readData() ?? Data()
+            let content = String(decoding: data, as: UTF8.self)
             return content
         } catch {
             throw parseS3Error(error)
@@ -573,16 +560,14 @@ actor S3Session: S3SessionProtocol {
         }
 
         let key = normalizeKey(path)
-        let byteBuffer = ByteBuffer(string: content)
-
-        let request = S3.PutObjectRequest(
-            body: .init(buffer: byteBuffer),
+        let request = PutObjectInput(
+            body: ByteStream.data(Data(content.utf8)),
             bucket: bucketName,
             key: key
         )
 
         do {
-            _ = try await s3.putObject(request)
+            _ = try await s3.putObject(input: request)
             log("Wrote content to: \(path)")
         } catch {
             throw parseS3Error(error)
@@ -647,6 +632,11 @@ actor S3Session: S3SessionProtocol {
             name = String(name[..<slashIndex])
         }
         return name
+    }
+
+    private func copySource(bucket: String, key: String) -> String {
+        let raw = "\(bucket)/\(key)"
+        return raw.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? raw
     }
 
     private func parseConnectionError(_ error: Error) -> AppError {
