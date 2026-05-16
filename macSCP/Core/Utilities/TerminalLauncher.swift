@@ -26,6 +26,9 @@ enum TerminalLauncherError: LocalizedError {
 }
 
 enum TerminalLauncher {
+    private static let terminalBundleIdentifier = "com.apple.Terminal"
+    private static let terminalLaunchTimeout: TimeInterval = 5
+
     /// Launches the macOS Terminal app and executes an SSH command using AppleScript.
     @discardableResult
     static func launchTerminal(
@@ -50,38 +53,112 @@ enum TerminalLauncher {
             let escapedPath = path.replacingOccurrences(of: "\"", with: "\\\"")
             sshCommand += " -t \"cd \\\"\(escapedPath)\\\" ; exec $SHELL -l\""
         }
-        
-        // Prepare AppleScript source using bundle identifier for better reliability
-        let scriptSource = """
-        tell application id "com.apple.Terminal"
+
+        switch ensureTerminalIsRunning() {
+        case .success:
+            break
+        case .failure(let error):
+            return .failure(error)
+        }
+
+        let activateScript = """
+        tell application id "\(terminalBundleIdentifier)"
             activate
-            do script "\(sshCommand.replacingOccurrences(of: "\"", with: "\\\""))"
         end tell
         """
-        
-        // Execute AppleScript directly
-        return executeAppleScript(scriptSource)
+
+        switch executeAppleScript(activateScript) {
+        case .success:
+            break
+        case .failure(let error):
+            return .failure(error)
+        }
+
+        let commandScript = """
+        tell application id "\(terminalBundleIdentifier)"
+            do script "\(escapeForAppleScript(sshCommand))"
+        end tell
+        """
+
+        let firstAttempt = executeAppleScript(commandScript)
+        if case .failure(TerminalLauncherError.executionFailed(let message)) = firstAttempt,
+           isTerminalNotRunningError(message) {
+            usleep(250_000)
+            return executeAppleScript(commandScript)
+        }
+
+        return firstAttempt
     }
-    
+
     private static func executeAppleScript(_ source: String) -> Result<Void, Error> {
         guard let script = NSAppleScript(source: source) else {
             return .failure(TerminalLauncherError.appleScriptInitializationFailed)
         }
-        
+
         var error: NSDictionary?
         script.executeAndReturnError(&error)
-        
+
         if let err = error {
             let message = err["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
             logError("AppleScript execution failed: \(message)", category: .ui)
-            
+
             if message.contains("not allowed") || message.contains("authorized") {
                 return .failure(TerminalLauncherError.automationNotAuthorized)
             }
-            
+
             return .failure(TerminalLauncherError.executionFailed(message))
         }
-        
+
         return .success(())
+    }
+
+    private static func ensureTerminalIsRunning() -> Result<Void, Error> {
+        if isTerminalRunning() {
+            return .success(())
+        }
+
+        guard let terminalURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: terminalBundleIdentifier) else {
+            return .failure(TerminalLauncherError.executionFailed("Terminal app could not be located."))
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var launchError: Error?
+        NSWorkspace.shared.openApplication(at: terminalURL, configuration: configuration) { _, error in
+            launchError = error
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + terminalLaunchTimeout)
+
+        if let launchError {
+            return .failure(TerminalLauncherError.executionFailed(launchError.localizedDescription))
+        }
+
+        let deadline = Date().addingTimeInterval(terminalLaunchTimeout)
+        while Date() < deadline {
+            if isTerminalRunning() {
+                return .success(())
+            }
+            usleep(100_000)
+        }
+
+        return .failure(TerminalLauncherError.executionFailed("Terminal app did not finish launching in time."))
+    }
+
+    private static func isTerminalRunning() -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: terminalBundleIdentifier).isEmpty == false
+    }
+
+    private static func isTerminalNotRunningError(_ message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("application isn’t running") || normalized.contains("application isn't running")
+    }
+
+    private static func escapeForAppleScript(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 }

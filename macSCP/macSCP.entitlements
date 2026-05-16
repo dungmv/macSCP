@@ -18,7 +18,7 @@
 	</array>
 	<key>com.apple.security.temporary-exception.apple-events</key>
 	<array>
-		<string>com.apple.terminal</string>
+		<string>com.apple.Terminal</string>
 	</array>
 </dict>
 </plist>
