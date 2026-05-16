@@ -380,12 +380,16 @@ final class ConnectionListViewModel {
             return
         }
 
-        TerminalLauncher.launchTerminal(
+        let result = TerminalLauncher.launchTerminal(
             host: connection.host,
             port: connection.port,
             username: connection.username,
             privateKeyPath: connection.privateKeyPath
         )
+        
+        if case .failure(let error) = result {
+            self.error = AppError.terminalError(error.localizedDescription)
+        }
     }
 
     func requestTerminal(for connection: Connection) {

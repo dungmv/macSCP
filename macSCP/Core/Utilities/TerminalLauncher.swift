@@ -8,15 +8,33 @@
 import Foundation
 import AppKit
 
+enum TerminalLauncherError: LocalizedError {
+    case appleScriptInitializationFailed
+    case executionFailed(String)
+    case automationNotAuthorized
+    
+    var errorDescription: String? {
+        switch self {
+        case .appleScriptInitializationFailed:
+            return "Failed to initialize AppleScript."
+        case .executionFailed(let message):
+            return "Terminal error: \(message)"
+        case .automationNotAuthorized:
+            return "Terminal automation not authorized. Please check System Settings > Privacy & Security > Automation."
+        }
+    }
+}
+
 enum TerminalLauncher {
     /// Launches the macOS Terminal app and executes an SSH command using AppleScript.
+    @discardableResult
     static func launchTerminal(
         host: String,
         port: Int,
         username: String,
         privateKeyPath: String? = nil,
         initialPath: String? = nil
-    ) {
+    ) -> Result<Void, Error> {
         logInfo("Launching native terminal (AppleScript) for \(username)@\(host):\(port)", category: .ui)
         
         var sshCommand = "ssh -p \(port)"
@@ -42,21 +60,28 @@ enum TerminalLauncher {
         """
         
         // Execute AppleScript directly
-        executeAppleScript(scriptSource)
+        return executeAppleScript(scriptSource)
     }
     
-    private static func executeAppleScript(_ source: String) {
-        if let script = NSAppleScript(source: source) {
-            var error: NSDictionary?
-            script.executeAndReturnError(&error)
-            
-            if let err = error {
-                logError("AppleScript execution failed: \(err)", category: .ui)
-                if let message = err["NSAppleScriptErrorMessage"] as? String, 
-                   message.contains("not allowed") || message.contains("authorized") {
-                    logError("Terminal automation not authorized. Please check System Settings > Privacy & Security > Automation.", category: .ui)
-                }
-            }
+    private static func executeAppleScript(_ source: String) -> Result<Void, Error> {
+        guard let script = NSAppleScript(source: source) else {
+            return .failure(TerminalLauncherError.appleScriptInitializationFailed)
         }
+        
+        var error: NSDictionary?
+        script.executeAndReturnError(&error)
+        
+        if let err = error {
+            let message = err["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
+            logError("AppleScript execution failed: \(message)", category: .ui)
+            
+            if message.contains("not allowed") || message.contains("authorized") {
+                return .failure(TerminalLauncherError.automationNotAuthorized)
+            }
+            
+            return .failure(TerminalLauncherError.executionFailed(message))
+        }
+        
+        return .success(())
     }
 }

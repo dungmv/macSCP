@@ -46,8 +46,8 @@ enum AppError: LocalizedError, Sendable {
     case uploadFailed(String)
     case fileReadFailed
     case fileWriteFailed
-
-
+    // Terminal errors
+    case terminalError(String)
 
     // Biometric errors
     case biometricNotAvailable
@@ -118,6 +118,8 @@ enum AppError: LocalizedError, Sendable {
             return "Failed to read file"
         case .fileWriteFailed:
             return "Failed to write file"
+        case .terminalError(let message):
+            return message
 
 
 

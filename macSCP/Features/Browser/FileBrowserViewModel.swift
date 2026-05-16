@@ -840,26 +840,6 @@ final class FileBrowserViewModel {
         pendingEditorWindowId = nil
     }
 
-    // MARK: - Terminal
-
-    func openTerminal() {
-        // Only supported for SFTP connections
-        guard connection.connectionType == .sftp else {
-            logWarning("Terminal only supported for SFTP connections", category: .ui)
-            return
-        }
-
-        TerminalLauncher.launchTerminal(
-            host: connection.host,
-            port: connection.port,
-            username: connection.username,
-            privateKeyPath: connection.privateKeyPath,
-            initialPath: currentPath
-        )
-        
-        logInfo("Opening native terminal from file browser at \(currentPath)", category: .ui)
-    }
-
     func clearError() {
         error = nil
     }

@@ -105,19 +105,6 @@ struct FileBrowserView: View {
                 Spacer()
             }
 
-            // Terminal button (SFTP only)
-            ToolbarItem(id: "terminal", placement: .primaryAction) {
-                if viewModel.connection.connectionType == .sftp {
-                    Button {
-                        viewModel.openTerminal()
-                    } label: {
-                        Label("Terminal", systemImage: "terminal")
-                    }
-                    .disabled(!viewModel.isConnected)
-                    .help("Open Terminal")
-                }
-            }
-
             // Transfers
             ToolbarItem(id: "transfers", placement: .primaryAction) {
                 TransfersToolbarButton(viewModel: viewModel)
