@@ -42,6 +42,7 @@ struct ConnectionFormSheet: View {
     @State private var username: String = ""
     @State private var authMethod: AuthMethod = .password
     @State private var privateKeyPath: String = ""
+    @State private var securityScopedBookmarkData: Data? = nil
     @State private var savePassword: Bool = false
     @State private var password: String = ""
     @State private var description: String = ""
@@ -254,6 +255,7 @@ struct ConnectionFormSheet: View {
             username = connection.username
             authMethod = connection.authMethod
             privateKeyPath = connection.privateKeyPath ?? ""
+            securityScopedBookmarkData = connection.securityScopedBookmarkData
             savePassword = connection.savePassword
             description = connection.description ?? ""
             iconName = connection.iconName
@@ -289,6 +291,7 @@ struct ConnectionFormSheet: View {
                 username: username.trimmed,
                 authMethod: authMethod,
                 privateKeyPath: authMethod == .privateKey ? privateKeyPath.trimmed : nil,
+                securityScopedBookmarkData: authMethod == .privateKey ? securityScopedBookmarkData : nil,
                 savePassword: savePassword,
                 description: description.trimmed.isEmpty ? nil : description.trimmed,
                 tags: tags,
@@ -309,6 +312,7 @@ struct ConnectionFormSheet: View {
                 username: username.trimmed,
                 authMethod: authMethod,
                 privateKeyPath: authMethod == .privateKey ? privateKeyPath.trimmed : nil,
+                securityScopedBookmarkData: authMethod == .privateKey ? securityScopedBookmarkData : nil,
                 savePassword: savePassword,
                 description: description.trimmed.isEmpty ? nil : description.trimmed,
                 tags: tags,
@@ -341,6 +345,11 @@ struct ConnectionFormSheet: View {
 
         if panel.runModal() == .OK, let url = panel.url {
             privateKeyPath = url.path
+            do {
+                securityScopedBookmarkData = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            } catch {
+                print("Failed to create security-scoped bookmark: \(error)")
+            }
         }
     }
 

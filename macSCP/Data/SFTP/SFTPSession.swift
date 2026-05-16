@@ -10,6 +10,8 @@ import Citadel
 import NIO
 import NIOCore
 import NIOFoundationCompat
+import NIOSSH
+import Crypto
 
 actor SFTPSession: SFTPSessionProtocol {
     private var client: SSHClient?
@@ -68,6 +70,7 @@ actor SFTPSession: SFTPSessionProtocol {
         port: Int,
         username: String,
         privateKeyPath: String,
+        bookmarkData: Data?,
         passphrase: String?
     ) async throws {
         logInfo("Connecting to \(username)@\(host):\(port) with private key", category: .sftp)
@@ -79,19 +82,42 @@ actor SFTPSession: SFTPSessionProtocol {
             let normalizedHost = (host.lowercased() == "localhost") ? "127.0.0.1" : host
 
             // Read the private key file
-            let privateKeyURL = URL(fileURLWithPath: privateKeyPath)
-            let privateKeyData = try Data(contentsOf: privateKeyURL)
-            guard let privateKeyString = String(data: privateKeyData, encoding: .utf8) else {
-                throw AppError.authenticationFailed
+            var privateKeyURL: URL
+            var isStale = false
+            var accessedSecurityScope = false
+
+            if let bookmarkData = bookmarkData {
+                privateKeyURL = try URL(resolvingBookmarkData: bookmarkData, options: .withSecurityScope, relativeTo: nil, bookmarkDataIsStale: &isStale)
+                accessedSecurityScope = privateKeyURL.startAccessingSecurityScopedResource()
+            } else {
+                privateKeyURL = URL(fileURLWithPath: privateKeyPath)
             }
 
-            // Note: Citadel's RSA private key init doesn't support passphrase directly
-            // For passphrase-protected keys, they need to be decrypted first or use OpenSSH format
-            // The library expects unencrypted PEM or OpenSSH format keys
-            let authMethod: SSHAuthenticationMethod = try .rsa(
-                username: username,
-                privateKey: .init(sshRsa: privateKeyString)
-            )
+            defer {
+                if accessedSecurityScope {
+                    privateKeyURL.stopAccessingSecurityScopedResource()
+                }
+            }
+
+            let privateKeyData = try Data(contentsOf: privateKeyURL)
+            
+            // Load the private key as a string for Citadel's detection and parsing
+            let privateKeyString = String(data: privateKeyData, encoding: .utf8) ?? ""
+            let passphraseData = passphrase?.data(using: .utf8)
+            
+            // Detect the key type (RSA or ED25519)
+            let keyType = (try? SSHKeyDetection.detectPrivateKeyType(from: privateKeyString)) ?? .rsa
+            
+            let authMethod: SSHAuthenticationMethod
+            if keyType == .ed25519 {
+                // Use ED25519 with optional passphrase decryption
+                let key = try Curve25519.Signing.PrivateKey(sshEd25519: privateKeyString, decryptionKey: passphraseData)
+                authMethod = .ed25519(username: username, privateKey: key)
+            } else {
+                // Fallback to RSA with optional passphrase decryption
+                let key = try Insecure.RSA.PrivateKey(sshRsa: privateKeyString, decryptionKey: passphraseData)
+                authMethod = .rsa(username: username, privateKey: key)
+            }
 
             client = try await SSHClient.connect(
                 host: normalizedHost,

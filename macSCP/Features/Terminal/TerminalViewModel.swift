@@ -110,6 +110,7 @@ final class TerminalViewModel {
                     port: connectionData.port,
                     username: connectionData.username,
                     privateKeyPath: keyPath,
+                    bookmarkData: connectionData.securityScopedBookmarkData,
                     passphrase: connectionData.password.isEmpty ? nil : connectionData.password,
                     terminalSize: currentSize
                 )

@@ -103,6 +103,7 @@ struct FileEditorWindow: View {
                         port: data.port,
                         username: data.username,
                         privateKeyPath: data.privateKeyPath ?? "",
+                        bookmarkData: data.securityScopedBookmarkData,
                         passphrase: data.password.isEmpty ? nil : data.password
                     )
                 }

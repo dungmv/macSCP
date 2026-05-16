@@ -31,6 +31,7 @@ protocol SFTPSessionProtocol: Sendable {
         port: Int,
         username: String,
         privateKeyPath: String,
+        bookmarkData: Data?,
         passphrase: String?
     ) async throws
 

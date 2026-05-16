@@ -17,6 +17,7 @@ final class ConnectionEntity {
     var username: String
     var authMethod: String
     var privateKeyPath: String?
+    var securityScopedBookmarkData: Data?
     var savePassword: Bool
     var connectionDescription: String?
     var tags: [String]
@@ -40,6 +41,7 @@ final class ConnectionEntity {
         username: String,
         authMethod: String = "password",
         privateKeyPath: String? = nil,
+        securityScopedBookmarkData: Data? = nil,
         savePassword: Bool = false,
         connectionDescription: String? = nil,
         tags: [String] = [],
@@ -58,6 +60,7 @@ final class ConnectionEntity {
         self.username = username
         self.authMethod = authMethod
         self.privateKeyPath = privateKeyPath
+        self.securityScopedBookmarkData = securityScopedBookmarkData
         self.savePassword = savePassword
         self.connectionDescription = connectionDescription
         self.tags = tags

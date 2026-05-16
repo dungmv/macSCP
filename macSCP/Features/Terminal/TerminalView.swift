@@ -371,7 +371,8 @@ struct SwiftTermView: NSViewRepresentable {
                 username: "testuser",
                 password: "testpass",
                 authMethod: .password,
-                privateKeyPath: nil
+                privateKeyPath: nil,
+                securityScopedBookmarkData: nil
             )
         )
     )

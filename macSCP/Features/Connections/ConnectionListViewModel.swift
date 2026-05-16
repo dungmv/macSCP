@@ -353,6 +353,7 @@ final class ConnectionListViewModel {
             password: password,
             authMethod: connection.authMethod,
             privateKeyPath: connection.privateKeyPath,
+            securityScopedBookmarkData: connection.securityScopedBookmarkData,
             connectionType: connection.connectionType,
             s3Region: connection.s3Region,
             s3Bucket: connection.s3Bucket,
@@ -392,7 +393,8 @@ final class ConnectionListViewModel {
             username: connection.username,
             password: password,
             authMethod: connection.authMethod,
-            privateKeyPath: connection.privateKeyPath
+            privateKeyPath: connection.privateKeyPath,
+            securityScopedBookmarkData: connection.securityScopedBookmarkData
         )
 
         let windowId = windowManager.storeTerminalData(data)
@@ -452,6 +454,7 @@ final class ConnectionListViewModel {
             username: connection.username,
             authMethod: connection.authMethod,
             privateKeyPath: connection.privateKeyPath,
+            securityScopedBookmarkData: connection.securityScopedBookmarkData,
             savePassword: connection.savePassword,
             description: connection.description,
             tags: connection.tags,

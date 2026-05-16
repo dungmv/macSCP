@@ -24,6 +24,7 @@ struct Connection: Identifiable, Hashable, Sendable, Codable, Transferable {
     var username: String
     var authMethod: AuthMethod
     var privateKeyPath: String?
+    var securityScopedBookmarkData: Data?
     var savePassword: Bool
     var description: String?
     var tags: [String]
@@ -46,6 +47,7 @@ struct Connection: Identifiable, Hashable, Sendable, Codable, Transferable {
         username: String,
         authMethod: AuthMethod = .password,
         privateKeyPath: String? = nil,
+        securityScopedBookmarkData: Data? = nil,
         savePassword: Bool = false,
         description: String? = nil,
         tags: [String] = [],
@@ -65,6 +67,7 @@ struct Connection: Identifiable, Hashable, Sendable, Codable, Transferable {
         self.username = username
         self.authMethod = authMethod
         self.privateKeyPath = privateKeyPath
+        self.securityScopedBookmarkData = securityScopedBookmarkData
         self.savePassword = savePassword
         self.description = description
         self.tags = tags

@@ -18,6 +18,7 @@ enum ConnectionMapper {
             username: entity.username,
             authMethod: AuthMethod(rawValue: entity.authMethod) ?? .password,
             privateKeyPath: entity.privateKeyPath,
+            securityScopedBookmarkData: entity.securityScopedBookmarkData,
             savePassword: entity.savePassword,
             description: entity.connectionDescription,
             tags: entity.tags,
@@ -40,6 +41,7 @@ enum ConnectionMapper {
         entity.username = domain.username
         entity.authMethod = domain.authMethod.rawValue
         entity.privateKeyPath = domain.privateKeyPath
+        entity.securityScopedBookmarkData = domain.securityScopedBookmarkData
         entity.savePassword = domain.savePassword
         entity.connectionDescription = domain.description
         entity.tags = domain.tags
@@ -61,6 +63,7 @@ enum ConnectionMapper {
             username: domain.username,
             authMethod: domain.authMethod.rawValue,
             privateKeyPath: domain.privateKeyPath,
+            securityScopedBookmarkData: domain.securityScopedBookmarkData,
             savePassword: domain.savePassword,
             connectionDescription: domain.description,
             tags: domain.tags,

@@ -19,6 +19,7 @@ struct FileBrowserWindowData: Sendable {
     let password: String
     let authMethod: AuthMethod
     let privateKeyPath: String?
+    let securityScopedBookmarkData: Data?
     let connectionType: ConnectionType
     let s3Region: String?
     let s3Bucket: String?
@@ -34,6 +35,7 @@ struct FileBrowserWindowData: Sendable {
         password: String,
         authMethod: AuthMethod,
         privateKeyPath: String?,
+        securityScopedBookmarkData: Data? = nil,
         connectionType: ConnectionType = .sftp,
         s3Region: String? = nil,
         s3Bucket: String? = nil,
@@ -48,6 +50,7 @@ struct FileBrowserWindowData: Sendable {
         self.password = password
         self.authMethod = authMethod
         self.privateKeyPath = privateKeyPath
+        self.securityScopedBookmarkData = securityScopedBookmarkData
         self.connectionType = connectionType
         self.s3Region = s3Region
         self.s3Bucket = s3Bucket
@@ -68,6 +71,7 @@ struct FileEditorWindowData: Sendable {
     let password: String
     let authMethod: AuthMethod
     let privateKeyPath: String?
+    let securityScopedBookmarkData: Data?
     // S3-specific fields
     let connectionType: ConnectionType
     let s3Region: String?
@@ -85,6 +89,7 @@ struct FileEditorWindowData: Sendable {
         password: String,
         authMethod: AuthMethod,
         privateKeyPath: String?,
+        securityScopedBookmarkData: Data? = nil,
         connectionType: ConnectionType = .sftp,
         s3Region: String? = nil,
         s3Bucket: String? = nil,
@@ -100,6 +105,7 @@ struct FileEditorWindowData: Sendable {
         self.password = password
         self.authMethod = authMethod
         self.privateKeyPath = privateKeyPath
+        self.securityScopedBookmarkData = securityScopedBookmarkData
         self.connectionType = connectionType
         self.s3Region = s3Region
         self.s3Bucket = s3Bucket
@@ -121,6 +127,7 @@ struct TerminalWindowData: Sendable {
     let password: String
     let authMethod: AuthMethod
     let privateKeyPath: String?
+    let securityScopedBookmarkData: Data?
 
     init(
         connectionId: UUID,
@@ -130,7 +137,8 @@ struct TerminalWindowData: Sendable {
         username: String,
         password: String,
         authMethod: AuthMethod,
-        privateKeyPath: String?
+        privateKeyPath: String?,
+        securityScopedBookmarkData: Data? = nil
     ) {
         self.connectionId = connectionId
         self.connectionName = connectionName
@@ -140,6 +148,7 @@ struct TerminalWindowData: Sendable {
         self.password = password
         self.authMethod = authMethod
         self.privateKeyPath = privateKeyPath
+        self.securityScopedBookmarkData = securityScopedBookmarkData
     }
 }
 

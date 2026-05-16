@@ -52,6 +52,7 @@ protocol TerminalSessionProtocol: Sendable {
         port: Int,
         username: String,
         privateKeyPath: String,
+        bookmarkData: Data?,
         passphrase: String?,
         terminalSize: TerminalSize
     ) async throws

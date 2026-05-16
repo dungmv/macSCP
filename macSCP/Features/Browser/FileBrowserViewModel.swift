@@ -211,6 +211,7 @@ final class FileBrowserViewModel {
                         port: connection.port,
                         username: connection.username,
                         privateKeyPath: keyPath,
+                        bookmarkData: connection.securityScopedBookmarkData,
                         passphrase: password.isEmpty ? nil : password
                     )
                 }
@@ -825,6 +826,7 @@ final class FileBrowserViewModel {
             password: password,
             authMethod: connection.authMethod,
             privateKeyPath: connection.privateKeyPath,
+            securityScopedBookmarkData: connection.securityScopedBookmarkData,
             connectionType: connection.connectionType,
             s3Region: connection.s3Region,
             s3Bucket: connection.s3Bucket,
@@ -860,7 +862,8 @@ final class FileBrowserViewModel {
             username: connection.username,
             password: password,
             authMethod: connection.authMethod,
-            privateKeyPath: connection.privateKeyPath
+            privateKeyPath: connection.privateKeyPath,
+            securityScopedBookmarkData: connection.securityScopedBookmarkData
         )
 
         let windowId = WindowManager.shared.storeTerminalData(data)
