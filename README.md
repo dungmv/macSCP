@@ -261,11 +261,9 @@ macSCP takes security seriously:
 Future features under consideration:
 
 - [x] Native Terminal integration
-- [ ] Port forwarding support
 - [ ] File synchronization
 - [ ] Bookmarks and favorites
 - [ ] Split-pane view
-- [ ] Theme customization
 - [ ] Import/export connections
 - [ ] Multi-tab support
 - [ ] iCloud sync for connections

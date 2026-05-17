@@ -138,11 +138,12 @@ struct NativeFileTableView: NSViewRepresentable {
         coordinator.rebuildRootNodes()
         outlineView.reloadData()
 
-        // Re-sync selection
+        // Re-sync selection across all visible (expanded) rows
         let selectedIndexes = NSMutableIndexSet()
-        for (index, node) in coordinator.rootNodes.enumerated() {
-            if viewModel.selectedFiles.contains(node.file.id) {
-                selectedIndexes.add(index)
+        for row in 0..<outlineView.numberOfRows {
+            if let node = outlineView.item(atRow: row) as? FileTreeNode,
+               viewModel.selectedFiles.contains(node.file.id) {
+                selectedIndexes.add(row)
             }
         }
         outlineView.selectRowIndexes(selectedIndexes as IndexSet,
