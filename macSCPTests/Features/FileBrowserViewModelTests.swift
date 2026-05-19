@@ -12,6 +12,7 @@ import XCTest
 final class FileBrowserViewModelTests: XCTestCase {
     var sut: FileBrowserViewModel!
     var mockSFTPSession: MockSFTPSession!
+    var mockS3Session: MockS3Session!
     var mockFileRepository: MockFileRepository!
     var mockClipboardService: ClipboardService!
 
@@ -24,6 +25,7 @@ final class FileBrowserViewModelTests: XCTestCase {
     override func setUp() async throws {
         try await super.setUp()
         mockSFTPSession = MockSFTPSession()
+        mockS3Session = MockS3Session()
         mockFileRepository = MockFileRepository()
         mockClipboardService = ClipboardService.shared
 
@@ -39,6 +41,7 @@ final class FileBrowserViewModelTests: XCTestCase {
     override func tearDown() async throws {
         sut = nil
         mockSFTPSession = nil
+        mockS3Session = nil
         mockFileRepository = nil
         mockClipboardService = nil
         try await super.tearDown()
@@ -206,6 +209,79 @@ final class FileBrowserViewModelTests: XCTestCase {
         XCTAssertTrue(mockClipboardService.isCut)
     }
 
+    func testS3ObjectURL_UsesS3SessionPublicURL() async throws {
+        let file = RemoteFile(name: "report.csv", path: "/reports/report.csv", isDirectory: false, size: 100, permissions: "-rw-r--r--")
+        let connection = Connection(
+            name: "S3",
+            host: "",
+            username: "access-key",
+            connectionType: .s3,
+            s3Region: "us-east-1",
+            s3Bucket: "test-bucket"
+        )
+        let s3ViewModel = FileBrowserViewModel(
+            connection: connection,
+            s3Session: mockS3Session,
+            fileRepository: mockFileRepository,
+            clipboardService: mockClipboardService,
+            secretAccessKey: "secret"
+        )
+
+        let url = try await s3ViewModel.s3ObjectURL(for: file)
+
+        let publicURLCalled = await mockS3Session.publicURLCalled
+        let lastPath = await mockS3Session.lastPublicURLPath
+        XCTAssertTrue(publicURLCalled)
+        XCTAssertEqual(lastPath, file.path)
+        XCTAssertEqual(url.absoluteString, "https://example.com/test.txt")
+    }
+
+    func testS3PresignedURL_UsesTenMinuteExpiration() async throws {
+        let file = RemoteFile(name: "report.csv", path: "/reports/report.csv", isDirectory: false, size: 100, permissions: "-rw-r--r--")
+        let connection = Connection(
+            name: "S3",
+            host: "",
+            username: "access-key",
+            connectionType: .s3,
+            s3Region: "us-east-1",
+            s3Bucket: "test-bucket"
+        )
+        let s3ViewModel = FileBrowserViewModel(
+            connection: connection,
+            s3Session: mockS3Session,
+            fileRepository: mockFileRepository,
+            clipboardService: mockClipboardService,
+            secretAccessKey: "secret"
+        )
+
+        let url = try await s3ViewModel.s3PresignedURL(for: file)
+
+        let presignedURLCalled = await mockS3Session.presignedURLCalled
+        let lastPath = await mockS3Session.lastPresignedURLPath
+        let lastExpiration = await mockS3Session.lastPresignedExpiration
+        XCTAssertTrue(presignedURLCalled)
+        XCTAssertEqual(lastPath, file.path)
+        XCTAssertNotNil(lastExpiration)
+        XCTAssertEqual(lastExpiration ?? 0, 600, accuracy: 0.001)
+        XCTAssertEqual(url.absoluteString, "https://example.com/test.txt?X-Amz-Signature=test")
+    }
+
+    func testS3Connection_AllowsEmptyBucket() {
+        let connection = Connection(
+            name: "S3",
+            host: "",
+            username: "access-key",
+            connectionType: .s3,
+            s3Region: "us-east-1",
+            s3Bucket: ""
+        )
+
+        XCTAssertTrue(connection.isValid)
+        XCTAssertFalse(connection.validationErrors.contains("Bucket name is required"))
+        XCTAssertEqual(connection.connectionString, "S3")
+        XCTAssertEqual(connection.displayHost, "S3")
+    }
+
     // MARK: - Selection Tests
 
     func testSelectAll() async {
@@ -270,5 +346,18 @@ final class FileBrowserViewModelTests: XCTestCase {
         // Then
         XCTAssertEqual(sut.sortedFiles.count, 1)
         XCTAssertFalse(sut.sortedFiles.first?.isHidden ?? true)
+    }
+
+    func testBucketRow_UsesDistinctIconAndTypeDescription() {
+        let bucket = RemoteFile(
+            name: "photos",
+            path: "/photos",
+            isDirectory: true,
+            size: 0,
+            permissions: "brwxr-xr-x"
+        )
+
+        XCTAssertEqual(FileTypeService.iconName(for: bucket), "externaldrive.fill")
+        XCTAssertEqual(FileTypeService.typeDescription(for: bucket), "Bucket")
     }
 }

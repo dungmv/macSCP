@@ -79,4 +79,10 @@ protocol S3SessionProtocol: Sendable {
 
     /// Get the absolute path (just returns the path for S3)
     func getRealPath(at path: String) async throws -> String
+
+    /// Build a direct object URL for copying/sharing
+    func publicURL(for path: String) async throws -> URL
+
+    /// Build a presigned object URL valid for the given duration
+    func presignedURL(for path: String, expiresIn: TimeInterval) async throws -> URL
 }

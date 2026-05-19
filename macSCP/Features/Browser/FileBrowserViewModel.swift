@@ -422,6 +422,40 @@ final class FileBrowserViewModel {
         clipboardService.cut(files: selectedFilesList, from: currentPath, connectionId: connection.id)
     }
 
+    func copyS3ObjectURL(for file: RemoteFile) async {
+        do {
+            let url = try await s3ObjectURL(for: file)
+            copyTextToPasteboard(url.absoluteString)
+            logInfo("Copied S3 object URL: \(file.name)", category: .s3)
+        } catch {
+            self.error = AppError.from(error)
+        }
+    }
+
+    func copyS3PresignedURL(for file: RemoteFile, expiresIn: TimeInterval = 600) async {
+        do {
+            let url = try await s3PresignedURL(for: file, expiresIn: expiresIn)
+            copyTextToPasteboard(url.absoluteString)
+            logInfo("Copied S3 presigned URL: \(file.name)", category: .s3)
+        } catch {
+            self.error = AppError.from(error)
+        }
+    }
+
+    func s3ObjectURL(for file: RemoteFile) async throws -> URL {
+        guard connection.connectionType == .s3, let s3Session else {
+            throw AppError.notConnected
+        }
+        return try await s3Session.publicURL(for: file.path)
+    }
+
+    func s3PresignedURL(for file: RemoteFile, expiresIn: TimeInterval = 600) async throws -> URL {
+        guard connection.connectionType == .s3, let s3Session else {
+            throw AppError.notConnected
+        }
+        return try await s3Session.presignedURL(for: file.path, expiresIn: expiresIn)
+    }
+
     func paste() async {
         guard canPaste else { return }
 
@@ -453,6 +487,12 @@ final class FileBrowserViewModel {
         }
 
         await loadFiles()
+    }
+
+    private func copyTextToPasteboard(_ value: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(value, forType: .string)
     }
 
     // MARK: - Download/Upload

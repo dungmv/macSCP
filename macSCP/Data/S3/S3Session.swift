@@ -16,6 +16,10 @@ actor S3Session: S3SessionProtocol {
     private(set) var isConnected = false
     private(set) var currentPath = "/"
     private(set) var bucketName = ""
+    private var configuredBucketName = ""
+    private var regionName = "us-east-1"
+    private var endpointURL: URL?
+    private var usesPathStyleURLs = false
 
     init() {}
 
@@ -35,7 +39,8 @@ actor S3Session: S3SessionProtocol {
         bucket: String,
         endpoint: String?
     ) async throws {
-        log("Connecting to S3 bucket: \(bucket) in region: \(region)")
+        let normalizedBucket = bucket.trimmingCharacters(in: .whitespacesAndNewlines)
+        log("Connecting to S3 \(normalizedBucket.isEmpty ? "account" : "bucket: \(normalizedBucket)") in region: \(region)")
 
         do {
             let credentials = AWSCredentialIdentity(
@@ -43,26 +48,34 @@ actor S3Session: S3SessionProtocol {
                 secret: secretAccessKey
             )
             let identityResolver = StaticAWSCredentialIdentityResolver(credentials)
+            let normalizedEndpoint = normalizeEndpointURL(endpoint)
             var configuration = try await S3Client.S3ClientConfig(
                 awsCredentialIdentityResolver: identityResolver,
                 region: region
             )
 
-            if let endpoint, !endpoint.isEmpty {
-                configuration.endpoint = endpoint
+            if let normalizedEndpoint {
+                configuration.endpoint = normalizedEndpoint.absoluteString
                 configuration.forcePathStyle = true
             }
             s3 = S3Client(config: configuration)
 
-            // Verify connection by checking if bucket exists
-            let headBucketRequest = HeadBucketInput(bucket: bucket)
-            _ = try await s3!.headBucket(input: headBucketRequest)
+            if normalizedBucket.isEmpty {
+                _ = try await s3!.listBuckets(input: ListBucketsInput())
+            } else {
+                let headBucketRequest = HeadBucketInput(bucket: normalizedBucket)
+                _ = try await s3!.headBucket(input: headBucketRequest)
+            }
 
-            bucketName = bucket
+            configuredBucketName = normalizedBucket
+            bucketName = normalizedBucket
+            regionName = region
+            endpointURL = normalizedEndpoint
+            usesPathStyleURLs = normalizedEndpoint != nil
             currentPath = "/"
             isConnected = true
 
-            log("Connected successfully to S3 bucket: \(bucket)")
+            log("Connected successfully to S3 \(normalizedBucket.isEmpty ? "account" : "bucket: \(normalizedBucket)")")
         } catch {
             try await cleanup()
             throw parseConnectionError(error)
@@ -75,6 +88,10 @@ actor S3Session: S3SessionProtocol {
         isConnected = false
         currentPath = "/"
         bucketName = ""
+        configuredBucketName = ""
+        regionName = "us-east-1"
+        endpointURL = nil
+        usesPathStyleURLs = false
     }
 
     private func cleanup() async throws {
@@ -88,13 +105,35 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let prefix = normalizePrefix(path)
-        currentPath = "/" + prefix
+        let target = try resolveListTarget(for: path)
+
+        if target.bucket.isEmpty {
+            let response = try await s3.listBuckets(input: ListBucketsInput())
+            currentPath = "/"
+            bucketName = ""
+
+            let buckets = (response.buckets ?? []).compactMap { bucket -> RemoteFile? in
+                guard let name = bucket.name, !name.isEmpty else { return nil }
+                return RemoteFile(
+                    name: name,
+                    path: "/" + name,
+                    isDirectory: true,
+                    size: 0,
+                    permissions: "brwxr-xr-x",
+                    modificationDate: bucket.creationDate
+                )
+            }
+
+            return RemoteFile.sortedFiles(buckets, by: .name)
+        }
+
+        currentPath = target.displayPath
+        bucketName = target.bucket
 
         let request = ListObjectsV2Input(
-            bucket: bucketName,
+            bucket: target.bucket,
             delimiter: "/",
-            prefix: prefix.isEmpty ? nil : prefix
+            prefix: target.prefix.isEmpty ? nil : target.prefix
         )
 
         let response = try await s3.listObjectsV2(input: request)
@@ -105,11 +144,11 @@ actor S3Session: S3SessionProtocol {
         if let commonPrefixes = response.commonPrefixes {
             for prefixObj in commonPrefixes {
                 if let prefixKey = prefixObj.prefix {
-                    let name = extractName(from: prefixKey, basePrefix: prefix)
+                    let name = extractName(from: prefixKey, basePrefix: target.prefix)
                     if !name.isEmpty && name != "/" {
                         let file = RemoteFile(
                             name: name,
-                            path: "/" + prefixKey,
+                            path: buildDisplayPath(bucket: target.bucket, key: prefixKey),
                             isDirectory: true,
                             size: 0,
                             permissions: "drwxr-xr-x",
@@ -126,15 +165,15 @@ actor S3Session: S3SessionProtocol {
             for object in contents {
                 if let key = object.key {
                     // Skip the prefix itself if it's a directory marker
-                    if key == prefix || key.hasSuffix("/") {
+                    if key == target.prefix || key.hasSuffix("/") {
                         continue
                     }
 
-                    let name = extractName(from: key, basePrefix: prefix)
+                    let name = extractName(from: key, basePrefix: target.prefix)
                     if !name.isEmpty {
                         let file = RemoteFile(
                             name: name,
-                            path: "/" + key,
+                            path: buildDisplayPath(bucket: target.bucket, key: key),
                             isDirectory: false,
                             size: Int64(object.size ?? 0),
                             permissions: "-rw-r--r--",
@@ -154,9 +193,10 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
 
-        let request = HeadObjectInput(bucket: bucketName, key: key)
+        let request = HeadObjectInput(bucket: target.bucket, key: key)
 
         do {
             let response = try await s3.headObject(input: request)
@@ -183,14 +223,15 @@ actor S3Session: S3SessionProtocol {
         }
 
         // In S3, directories are simulated with a zero-byte object ending with /
-        var key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        var key = target.key
         if !key.hasSuffix("/") {
             key += "/"
         }
 
         let request = PutObjectInput(
             body: ByteStream.data(Data()),
-            bucket: bucketName,
+            bucket: target.bucket,
             key: key
         )
 
@@ -207,11 +248,12 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
 
         let request = PutObjectInput(
             body: ByteStream.data(Data()),
-            bucket: bucketName,
+            bucket: target.bucket,
             key: key
         )
 
@@ -228,9 +270,10 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
 
-        let request = DeleteObjectInput(bucket: bucketName, key: key)
+        let request = DeleteObjectInput(bucket: target.bucket, key: key)
 
         do {
             _ = try await s3.deleteObject(input: request)
@@ -245,13 +288,14 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        var prefix = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        var prefix = target.key
         if !prefix.hasSuffix("/") {
             prefix += "/"
         }
 
         // List all objects with this prefix and delete them
-        let listRequest = ListObjectsV2Input(bucket: bucketName, prefix: prefix)
+        let listRequest = ListObjectsV2Input(bucket: target.bucket, prefix: prefix)
         let response = try await s3.listObjectsV2(input: listRequest)
 
         if let contents = response.contents, !contents.isEmpty {
@@ -262,7 +306,7 @@ actor S3Session: S3SessionProtocol {
 
             if !objectsToDelete.isEmpty {
                 let deleteRequest = DeleteObjectsInput(
-                    bucket: bucketName,
+                    bucket: target.bucket,
                     delete: S3ClientTypes.Delete(objects: objectsToDelete)
                 )
                 _ = try await s3.deleteObjects(input: deleteRequest)
@@ -270,7 +314,7 @@ actor S3Session: S3SessionProtocol {
         }
 
         // Also try to delete the directory marker itself
-        let dirMarkerRequest = DeleteObjectInput(bucket: bucketName, key: prefix)
+        let dirMarkerRequest = DeleteObjectInput(bucket: target.bucket, key: prefix)
         _ = try? await s3.deleteObject(input: dirMarkerRequest)
 
         log("Deleted directory: \(path)")
@@ -278,7 +322,12 @@ actor S3Session: S3SessionProtocol {
 
     func rename(from sourcePath: String, to destinationPath: String) async throws {
         // S3 doesn't support rename, so we copy then delete
-        let sourceKey = normalizeKey(sourcePath)
+        let sourceTarget = try resolveObjectTarget(for: sourcePath)
+        let destinationTarget = try resolveObjectTarget(for: destinationPath)
+        guard sourceTarget.bucket == destinationTarget.bucket else {
+            throw AppError.s3OperationFailed("Moving across buckets is not supported")
+        }
+        let sourceKey = sourceTarget.key
 
         // Check if this is a directory (ends with "/" or has objects with this prefix)
         if sourceKey.hasSuffix("/") {
@@ -291,7 +340,7 @@ actor S3Session: S3SessionProtocol {
             }
 
             let listRequest = ListObjectsV2Input(
-                bucket: bucketName,
+                bucket: sourceTarget.bucket,
                 maxKeys: 1,
                 prefix: sourceKey + "/"
             )
@@ -315,12 +364,17 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let sourceKey = normalizeKey(sourcePath)
-        let destKey = normalizeKey(destinationPath)
+        let sourceTarget = try resolveObjectTarget(for: sourcePath)
+        let destinationTarget = try resolveObjectTarget(for: destinationPath)
+        guard sourceTarget.bucket == destinationTarget.bucket else {
+            throw AppError.s3OperationFailed("Copying across buckets is not supported")
+        }
+        let sourceKey = sourceTarget.key
+        let destKey = destinationTarget.key
 
         let request = CopyObjectInput(
-            bucket: bucketName,
-            copySource: copySource(bucket: bucketName, key: sourceKey),
+            bucket: destinationTarget.bucket,
+            copySource: copySource(bucket: sourceTarget.bucket, key: sourceKey),
             key: destKey
         )
 
@@ -337,18 +391,24 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        var sourcePrefix = normalizeKey(sourcePath)
+        let sourceTarget = try resolveObjectTarget(for: sourcePath)
+        let destinationTarget = try resolveObjectTarget(for: destinationPath)
+        guard sourceTarget.bucket == destinationTarget.bucket else {
+            throw AppError.s3OperationFailed("Copying across buckets is not supported")
+        }
+
+        var sourcePrefix = sourceTarget.key
         if !sourcePrefix.hasSuffix("/") {
             sourcePrefix += "/"
         }
 
-        var destPrefix = normalizeKey(destinationPath)
+        var destPrefix = destinationTarget.key
         if !destPrefix.hasSuffix("/") {
             destPrefix += "/"
         }
 
         // List all objects with source prefix
-        let listRequest = ListObjectsV2Input(bucket: bucketName, prefix: sourcePrefix)
+        let listRequest = ListObjectsV2Input(bucket: sourceTarget.bucket, prefix: sourcePrefix)
         let response = try await s3.listObjectsV2(input: listRequest)
 
         if let contents = response.contents {
@@ -358,8 +418,8 @@ actor S3Session: S3SessionProtocol {
                     let newKey = destPrefix + relativePath
 
                     let copyRequest = CopyObjectInput(
-                        bucket: bucketName,
-                        copySource: copySource(bucket: bucketName, key: key),
+                        bucket: destinationTarget.bucket,
+                        copySource: copySource(bucket: sourceTarget.bucket, key: key),
                         key: newKey
                     )
                     _ = try await s3.copyObject(input: copyRequest)
@@ -371,7 +431,12 @@ actor S3Session: S3SessionProtocol {
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
-        let sourceKey = normalizeKey(sourcePath)
+        let sourceTarget = try resolveObjectTarget(for: sourcePath)
+        let destinationTarget = try resolveObjectTarget(for: destinationPath)
+        guard sourceTarget.bucket == destinationTarget.bucket else {
+            throw AppError.s3OperationFailed("Moving across buckets is not supported")
+        }
+        let sourceKey = sourceTarget.key
 
         if sourceKey.hasSuffix("/") {
             // Moving a directory
@@ -395,9 +460,10 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(remotePath)
+        let target = try resolveObjectTarget(for: remotePath)
+        let key = target.key
 
-        let request = GetObjectInput(bucket: bucketName, key: key)
+        let request = GetObjectInput(bucket: target.bucket, key: key)
 
         do {
             let response = try await s3.getObject(input: request)
@@ -427,7 +493,8 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(remotePath)
+        let target = try resolveObjectTarget(for: remotePath)
+        let key = target.key
         let fileSize = try FileManager.default.attributesOfItem(atPath: localURL.path)[.size] as? Int64 ?? 0
 
         // Use multipart upload for files > 5MB (S3 minimum part size)
@@ -444,7 +511,7 @@ actor S3Session: S3SessionProtocol {
                 let data = fileHandle.readDataToEndOfFile()
                 let request = PutObjectInput(
                     body: ByteStream.data(data),
-                    bucket: bucketName,
+                    bucket: target.bucket,
                     key: key
                 )
                 _ = try await s3.putObject(input: request)
@@ -453,7 +520,7 @@ actor S3Session: S3SessionProtocol {
                 progress?(fileSize)
             } else {
                 // Large file: use multipart upload to avoid memory issues
-                try await uploadMultipart(from: localURL, key: key, fileSize: fileSize, progress: progress)
+                try await uploadMultipart(from: localURL, bucket: target.bucket, key: key, fileSize: fileSize, progress: progress)
             }
             log("Uploaded: \(localURL.path) to \(remotePath)")
         } catch {
@@ -462,7 +529,7 @@ actor S3Session: S3SessionProtocol {
     }
 
     /// Uploads a large file using S3 multipart upload
-    private func uploadMultipart(from localURL: URL, key: String, fileSize: Int64, progress: TransferProgressHandler? = nil) async throws {
+    private func uploadMultipart(from localURL: URL, bucket: String, key: String, fileSize: Int64, progress: TransferProgressHandler? = nil) async throws {
         guard let s3 = s3 else {
             throw AppError.notConnected
         }
@@ -473,7 +540,7 @@ actor S3Session: S3SessionProtocol {
         defer { try? fileHandle.close() }
 
         // 1. Initiate multipart upload
-        let createRequest = CreateMultipartUploadInput(bucket: bucketName, key: key)
+        let createRequest = CreateMultipartUploadInput(bucket: bucket, key: key)
         let createResponse = try await s3.createMultipartUpload(input: createRequest)
 
         guard let uploadId = createResponse.uploadId else {
@@ -494,7 +561,7 @@ actor S3Session: S3SessionProtocol {
 
                 let uploadPartRequest = UploadPartInput(
                     body: ByteStream.data(partData),
-                    bucket: bucketName,
+                    bucket: bucket,
                     key: key,
                     partNumber: partNumber,
                     uploadId: uploadId
@@ -512,7 +579,7 @@ actor S3Session: S3SessionProtocol {
 
             // 3. Complete multipart upload
             let completeRequest = CompleteMultipartUploadInput(
-                bucket: bucketName,
+                bucket: bucket,
                 key: key,
                 multipartUpload: S3ClientTypes.CompletedMultipartUpload(parts: completedParts),
                 uploadId: uploadId
@@ -522,7 +589,7 @@ actor S3Session: S3SessionProtocol {
         } catch {
             // Abort multipart upload on failure to clean up partial uploads
             let abortRequest = AbortMultipartUploadInput(
-                bucket: bucketName,
+                bucket: bucket,
                 key: key,
                 uploadId: uploadId
             )
@@ -536,9 +603,10 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
 
-        let request = GetObjectInput(bucket: bucketName, key: key)
+        let request = GetObjectInput(bucket: target.bucket, key: key)
 
         do {
             let response = try await s3.getObject(input: request)
@@ -559,10 +627,11 @@ actor S3Session: S3SessionProtocol {
             throw AppError.notConnected
         }
 
-        let key = normalizeKey(path)
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
         let request = PutObjectInput(
             body: ByteStream.data(Data(content.utf8)),
-            bucket: bucketName,
+            bucket: target.bucket,
             key: key
         )
 
@@ -597,6 +666,44 @@ actor S3Session: S3SessionProtocol {
         return currentPath + "/" + path
     }
 
+    func publicURL(for path: String) async throws -> URL {
+        guard isConnected else {
+            throw AppError.notConnected
+        }
+
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
+        guard !key.isEmpty else {
+            throw AppError.invalidPath
+        }
+
+        guard let url = buildObjectURL(bucket: target.bucket, forKey: key) else {
+            throw AppError.s3OperationFailed("Failed to build object URL")
+        }
+
+        return url
+    }
+
+    func presignedURL(for path: String, expiresIn: TimeInterval) async throws -> URL {
+        guard let s3 = s3 else {
+            throw AppError.notConnected
+        }
+
+        let target = try resolveObjectTarget(for: path)
+        let key = target.key
+        guard !key.isEmpty else {
+            throw AppError.invalidPath
+        }
+
+        let request = GetObjectInput(bucket: target.bucket, key: key)
+
+        do {
+            return try await s3.presignedURLForGetObject(input: request, expiration: expiresIn)
+        } catch {
+            throw parseS3Error(error)
+        }
+    }
+
     // MARK: - Private Helpers
 
     /// Normalizes a path to an S3 key (removes leading /)
@@ -625,6 +732,48 @@ actor S3Session: S3SessionProtocol {
         return prefix
     }
 
+    private func resolveListTarget(for path: String) throws -> (bucket: String, prefix: String, displayPath: String) {
+        if !configuredBucketName.isEmpty {
+            let prefix = normalizePrefix(path)
+            let displayPath = prefix.isEmpty ? "/" : "/" + prefix
+            return (configuredBucketName, prefix, displayPath)
+        }
+
+        let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmedPath.isEmpty else {
+            return ("", "", "/")
+        }
+
+        let components = trimmedPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        let bucket = components[0]
+        let remainder = components.dropFirst().joined(separator: "/")
+        let prefix = remainder.isEmpty ? "" : remainder + "/"
+        return (bucket, prefix, "/" + ([bucket] + (remainder.isEmpty ? [] : [remainder])).joined(separator: "/"))
+    }
+
+    private func resolveObjectTarget(for path: String) throws -> (bucket: String, key: String) {
+        if !configuredBucketName.isEmpty {
+            let key = normalizeKey(path)
+            guard !key.isEmpty else {
+                throw AppError.invalidPath
+            }
+            return (configuredBucketName, key)
+        }
+
+        let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let components = trimmedPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard let bucket = components.first else {
+            throw AppError.invalidPath
+        }
+
+        let key = components.dropFirst().joined(separator: "/")
+        guard !key.isEmpty else {
+            throw AppError.invalidPath
+        }
+
+        return (bucket, key)
+    }
+
     /// Extracts the name from a key given a base prefix
     private func extractName(from key: String, basePrefix: String) -> String {
         var name = String(key.dropFirst(basePrefix.count))
@@ -642,6 +791,72 @@ actor S3Session: S3SessionProtocol {
     private func copySource(bucket: String, key: String) -> String {
         let raw = "\(bucket)/\(key)"
         return raw.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? raw
+    }
+
+    private func normalizeEndpointURL(_ endpoint: String?) -> URL? {
+        guard let endpoint else { return nil }
+        let trimmed = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed), url.scheme != nil {
+            return url
+        }
+
+        return URL(string: "https://\(trimmed)")
+    }
+
+    private func buildDisplayPath(bucket: String, key: String) -> String {
+        guard !configuredBucketName.isEmpty else {
+            return "/" + bucket + (key.isEmpty ? "" : "/" + key)
+        }
+
+        return "/" + key
+    }
+
+    private func buildObjectURL(bucket: String, forKey key: String) -> URL? {
+        if usesPathStyleURLs, let endpointURL {
+            return buildPathStyleURL(baseURL: endpointURL, bucket: bucket, key: key)
+        }
+
+        return buildAWSHostedStyleURL(bucket: bucket, forKey: key)
+    }
+
+    private func buildPathStyleURL(baseURL: URL, bucket: String, key: String) -> URL? {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let bucketPath = percentEncodePathComponent(bucket)
+        let keyPath = percentEncodeObjectKey(key)
+        let joinedPath = [basePath, bucketPath, keyPath]
+            .filter { !$0.isEmpty }
+            .joined(separator: "/")
+
+        components.percentEncodedPath = "/" + joinedPath
+        return components.url
+    }
+
+    private func buildAWSHostedStyleURL(bucket: String, forKey key: String) -> URL? {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "\(bucket).s3.\(regionName).amazonaws.com"
+        components.percentEncodedPath = "/" + percentEncodeObjectKey(key)
+        return components.url
+    }
+
+    private func percentEncodePathComponent(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? value
+    }
+
+    private func percentEncodeObjectKey(_ key: String) -> String {
+        key.split(separator: "/", omittingEmptySubsequences: false)
+            .map { segment in
+                String(segment).addingPercentEncoding(
+                    withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+                ) ?? String(segment)
+            }
+            .joined(separator: "/")
     }
 
     private func parseConnectionError(_ error: Error) -> AppError {

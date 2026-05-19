@@ -513,6 +513,15 @@ extension NativeFileTableView.Coordinator {
             addItem(menu, title: "Open in Editor",
                     action: #selector(handleOpenInEditor(_:)),
                     image: "pencil.and.outline", object: file)
+            if viewModel.connection.connectionType == .s3 {
+                menu.addItem(.separator())
+                addItem(menu, title: "Copy URL",
+                        action: #selector(handleCopyURL(_:)),
+                        image: "link", object: file)
+                addItem(menu, title: "Copy Presigned URL",
+                        action: #selector(handleCopyPresignedURL(_:)),
+                        image: "timer", object: file)
+            }
             menu.addItem(.separator())
         }
 
@@ -548,6 +557,14 @@ extension NativeFileTableView.Coordinator {
 
     @objc func handleOpenInEditor(_ s: NSMenuItem) {
         (s.representedObject as? RemoteFile).map { onOpenEditor?($0) }
+    }
+    @objc func handleCopyURL(_ s: NSMenuItem) {
+        guard let f = s.representedObject as? RemoteFile else { return }
+        Task { @MainActor in await viewModel.copyS3ObjectURL(for: f) }
+    }
+    @objc func handleCopyPresignedURL(_ s: NSMenuItem) {
+        guard let f = s.representedObject as? RemoteFile else { return }
+        Task { @MainActor in await viewModel.copyS3PresignedURL(for: f, expiresIn: 600) }
     }
     @objc func handleCopy(_ s: NSMenuItem) {
         guard let f = s.representedObject as? RemoteFile else { return }

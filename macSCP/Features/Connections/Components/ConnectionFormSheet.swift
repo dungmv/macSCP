@@ -240,8 +240,7 @@ struct ConnectionFormSheet: View {
                 (authMethod == .password || !privateKeyPath.trimmed.isEmpty)
         case .s3:
             return !name.trimmed.isEmpty &&
-                !username.trimmed.isEmpty &&
-                !s3Bucket.trimmed.isEmpty
+                !username.trimmed.isEmpty
         }
     }
 

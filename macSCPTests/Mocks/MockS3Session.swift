@@ -1,21 +1,19 @@
 //
-//  MockSFTPSession.swift
+//  MockS3Session.swift
 //  macSCPTests
 //
-//  Mock implementation of SFTPSessionProtocol for testing
+//  Mock implementation of S3SessionProtocol for testing
 //
 
 import Foundation
 @testable import macSCP
 
-actor MockSFTPSession: SFTPSessionProtocol {
-    // MARK: - State
+actor MockS3Session: S3SessionProtocol {
     private(set) var isConnected = false
     private(set) var currentPath = "/"
+    private(set) var bucketName = "test-bucket"
 
-    // MARK: - Recorded Calls
-    var connectPasswordCalled = false
-    var connectKeyCalled = false
+    var connectCalled = false
     var disconnectCalled = false
     var listFilesCalled = false
     var getFileInfoCalled = false
@@ -32,35 +30,30 @@ actor MockSFTPSession: SFTPSessionProtocol {
     var readFileContentCalled = false
     var writeFileContentCalled = false
     var getRealPathCalled = false
-    var executeCommandCalled = false
+    var publicURLCalled = false
+    var presignedURLCalled = false
 
-    // MARK: - Mock Responses
     var mockFiles: [RemoteFile] = []
     var mockFileInfo: RemoteFile?
-    var mockFileContent: String = ""
-    var mockRealPath: String = "/home/user"
-    var mockCommandOutput: String = ""
+    var mockFileContent = ""
+    var mockRealPath = "/"
+    var mockPublicURL = URL(string: "https://example.com/test.txt")!
+    var mockPresignedURL = URL(string: "https://example.com/test.txt?X-Amz-Signature=test")!
+    var lastPresignedExpiration: TimeInterval?
+    var lastPublicURLPath: String?
+    var lastPresignedURLPath: String?
     var mockError: Error?
 
-    // MARK: - Protocol Implementation
-
-    func connect(host: String, port: Int, username: String, password: String) async throws {
-        connectPasswordCalled = true
-        if let error = mockError { throw error }
-        isConnected = true
-        currentPath = mockRealPath
-    }
-
     func connect(
-        host: String,
-        port: Int,
-        username: String,
-        privateKeyPath: String,
-        bookmarkData: Data?,
-        passphrase: String?
+        accessKeyId: String,
+        secretAccessKey: String,
+        region: String,
+        bucket: String,
+        endpoint: String?
     ) async throws {
-        connectKeyCalled = true
-        if let error = mockError { throw error }
+        connectCalled = true
+        if let mockError { throw mockError }
+        bucketName = bucket
         isConnected = true
         currentPath = mockRealPath
     }
@@ -69,137 +62,112 @@ actor MockSFTPSession: SFTPSessionProtocol {
         disconnectCalled = true
         isConnected = false
         currentPath = "/"
+        bucketName = ""
     }
 
     func listFiles(at path: String) async throws -> [RemoteFile] {
         listFilesCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
         currentPath = path
         return mockFiles
     }
 
     func getFileInfo(at path: String) async throws -> RemoteFile {
         getFileInfoCalled = true
-        if let error = mockError { throw error }
-        guard let file = mockFileInfo else {
-            throw AppError.fileNotFound
-        }
-        return file
+        if let mockError { throw mockError }
+        guard let mockFileInfo else { throw AppError.fileNotFound }
+        return mockFileInfo
     }
 
     func createDirectory(at path: String) async throws {
         createDirectoryCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func createFile(at path: String) async throws {
         createFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func deleteFile(at path: String) async throws {
         deleteFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func deleteDirectory(at path: String) async throws {
         deleteDirectoryCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func rename(from sourcePath: String, to destinationPath: String) async throws {
         renameCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func copyFile(from sourcePath: String, to destinationPath: String) async throws {
         copyFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func copyDirectory(from sourcePath: String, to destinationPath: String) async throws {
         copyDirectoryCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func move(from sourcePath: String, to destinationPath: String) async throws {
         moveCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func downloadFile(from remotePath: String, to localURL: URL) async throws {
         downloadFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func downloadFile(from remotePath: String, to localURL: URL, progress: TransferProgressHandler?) async throws {
         downloadFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func uploadFile(from localURL: URL, to remotePath: String) async throws {
         uploadFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func uploadFile(from localURL: URL, to remotePath: String, progress: TransferProgressHandler?) async throws {
         uploadFileCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func readFileContent(at path: String) async throws -> String {
         readFileContentCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
         return mockFileContent
     }
 
     func writeFileContent(_ content: String, to path: String) async throws {
         writeFileContentCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
     }
 
     func getRealPath(at path: String) async throws -> String {
         getRealPathCalled = true
-        if let error = mockError { throw error }
+        if let mockError { throw mockError }
         return mockRealPath
     }
 
-    func executeCommand(_ command: String) async throws -> String {
-        executeCommandCalled = true
-        if let error = mockError { throw error }
-        return mockCommandOutput
+    func publicURL(for path: String) async throws -> URL {
+        publicURLCalled = true
+        lastPublicURLPath = path
+        if let mockError { throw mockError }
+        return mockPublicURL
     }
 
-    // MARK: - Reset
-    func reset() {
-        isConnected = false
-        currentPath = "/"
-
-        connectPasswordCalled = false
-        connectKeyCalled = false
-        disconnectCalled = false
-        listFilesCalled = false
-        getFileInfoCalled = false
-        createDirectoryCalled = false
-        createFileCalled = false
-        deleteFileCalled = false
-        deleteDirectoryCalled = false
-        renameCalled = false
-        copyFileCalled = false
-        copyDirectoryCalled = false
-        moveCalled = false
-        downloadFileCalled = false
-        uploadFileCalled = false
-        readFileContentCalled = false
-        writeFileContentCalled = false
-        getRealPathCalled = false
-        executeCommandCalled = false
-
-        mockFiles = []
-        mockFileInfo = nil
-        mockFileContent = ""
-        mockRealPath = "/home/user"
-        mockCommandOutput = ""
-        mockError = nil
+    func presignedURL(for path: String, expiresIn: TimeInterval) async throws -> URL {
+        presignedURLCalled = true
+        lastPresignedURLPath = path
+        lastPresignedExpiration = expiresIn
+        if let mockError { throw mockError }
+        return mockPresignedURL
     }
 }

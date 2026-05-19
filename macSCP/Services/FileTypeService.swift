@@ -10,8 +10,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum FileTypeService {
+    private static func isBucket(_ file: RemoteFile) -> Bool {
+        file.isDirectory && file.permissions.hasPrefix("b")
+    }
+
     /// Returns the SF Symbol name for a file
     static func iconName(for file: RemoteFile) -> String {
+        if isBucket(file) {
+            return "externaldrive.fill"
+        }
+
         if file.isDirectory {
             return "folder.fill"
         }
@@ -21,6 +29,10 @@ enum FileTypeService {
 
     /// Returns the icon color for a file type
     static func iconColor(for file: RemoteFile) -> Color {
+        if isBucket(file) {
+            return .teal
+        }
+
         if file.isDirectory {
             return .blue
         }
@@ -74,6 +86,10 @@ enum FileTypeService {
 
     /// Returns a human-readable description of the file type (Finder style)
     static func typeDescription(for file: RemoteFile) -> String {
+        if isBucket(file) {
+            return "Bucket"
+        }
+
         if file.isDirectory {
             return "Folder"
         }

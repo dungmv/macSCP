@@ -93,7 +93,10 @@ struct Connection: Identifiable, Hashable, Sendable, Codable, Transferable {
             if let endpoint = s3Endpoint, !endpoint.isEmpty {
                 return endpoint
             }
-            return s3Bucket ?? "S3"
+            if let bucket = s3Bucket, !bucket.isBlank {
+                return bucket
+            }
+            return "S3"
         }
     }
 
@@ -102,7 +105,7 @@ struct Connection: Identifiable, Hashable, Sendable, Codable, Transferable {
         case .sftp:
             return "\(username)@\(displayHost)"
         case .s3:
-            if let bucket = s3Bucket {
+            if let bucket = s3Bucket, !bucket.isBlank {
                 return "s3://\(bucket)"
             }
             return "S3"
@@ -146,8 +149,7 @@ extension Connection {
 
     private var isS3Valid: Bool {
         !name.isBlank &&
-        !username.isBlank &&  // Access Key ID
-        !(s3Bucket?.isBlank ?? true)
+        !username.isBlank  // Access Key ID
     }
 
     var validationErrors: [String] {
@@ -186,9 +188,6 @@ extension Connection {
         }
         if username.isBlank {
             errors.append("Access Key ID is required")
-        }
-        if s3Bucket?.isBlank ?? true {
-            errors.append("Bucket name is required")
         }
         return errors
     }

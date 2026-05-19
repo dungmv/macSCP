@@ -155,7 +155,7 @@ struct ConnectionDetailView: View {
         GroupBox {
             VStack(spacing: 0) {
                 contactDetailRow(label: "access key", value: connection.username, icon: "key")
-                if let bucket = connection.s3Bucket {
+                if let bucket = connection.s3Bucket, !bucket.isEmpty {
                     Divider().padding(.leading, 36)
                     contactDetailRow(label: "bucket", value: bucket, icon: "externaldrive")
                 }
